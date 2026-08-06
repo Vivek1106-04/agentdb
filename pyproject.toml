@@ -1,0 +1,144 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentdb"
+version = "0.1.0"
+description = "Plan-grounded context layer and reproducible NL-to-SQL accuracy benchmark for ClickHouse and Postgres"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+authors = [{ name = "Vivek Gangavarapu" }]
+keywords = ["clickhouse", "postgres", "mcp", "text-to-sql", "benchmark", "agents"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Database",
+]
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/vivekgangavarapu/agentdb"
+Documentation = "https://github.com/vivekgangavarapu/agentdb/tree/main/docs"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "pytest-asyncio>=0.25",
+  "hypothesis>=6.122",
+  "ruff>=0.9",
+  "mypy>=1.14",
+  "import-linter>=2.1",
+  "types-pyyaml>=6.0.12.20260724",
+]
+
+[tool.hatch.build.targets.wheel]
+# Two independent top-level packages in one distribution. agenteval ships
+# alongside agentdb for convenience only; it depends on none of it (SPEC §4.1.6).
+packages = ["src/agentdb", "eval/agenteval"]
+
+# ---------------------------------------------------------------------------
+# lint / format
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "eval", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",    # pycodestyle
+  "F",         # pyflakes
+  "I",         # isort
+  "N",         # pep8-naming
+  "UP",        # pyupgrade
+  "B",         # bugbear
+  "A",         # builtins shadowing
+  "C4",        # comprehensions
+  "SIM",       # simplify
+  "PTH",       # pathlib
+  "RET",       # returns
+  "ARG",       # unused arguments
+  "TRY",       # tryceratops
+  "RUF",
+]
+ignore = [
+  "TRY003",  # long messages outside exception class: we prefer readable errors
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ---------------------------------------------------------------------------
+# typing
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+disallow_any_explicit = false
+disallow_any_generics = true
+no_implicit_reexport = true
+files = ["src", "eval", "tests"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_decorators = false
+
+# ---------------------------------------------------------------------------
+# tests + coverage
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers --strict-config"
+markers = [
+  "e2e: requires live Postgres and/or ClickHouse (deselect with -m 'not e2e')",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/agentdb", "eval/agenteval"]
+parallel = false
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "\\.\\.\\.",
+]
+
+# ---------------------------------------------------------------------------
+# architectural isolation (SPEC 4.1.6, 12)
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_packages = ["agentdb", "agenteval"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "agenteval is vendor-neutral: it must never import agentdb"
+type = "forbidden"
+source_modules = ["agenteval"]
+forbidden_modules = ["agentdb"]
+
+# NOTE: contracts naming agentdb.core / agentdb.server are added as those
+# packages land (layer 2 onwards); import-linter errors on modules that do not
+# exist yet, so the contract set grows with the codebase rather than ahead of it.
+
+[[tool.importlinter.contracts]]
+name = "layers"
+type = "layers"
+layers = ["agentdb.adapters", "agentdb.config"]
+exhaustive = false

@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+.env
+.env.*
+!.env.example
+
+.DS_Store
+.idea/
+.vscode/
+
+# generated benchmark scratch; results/ itself is committed (SPEC §11.6)
+results/tmp/
+
+# personal build specification, not published
+SPEC.md
