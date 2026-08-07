@@ -22,6 +22,11 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+# Model providers are optional: importing the harness must never require an API
+# key or a vendor SDK (SPEC §11.3 — adapters are pluggable).
+anthropic = ["anthropic>=0.45"]
+
 [project.urls]
 Homepage = "https://github.com/vivekgangavarapu/agentdb"
 Documentation = "https://github.com/vivekgangavarapu/agentdb/tree/main/docs"

@@ -1,0 +1,84 @@
+# ClickBench Q0-Q6 — whole-table aggregates.
+# Question text is authored; gold_sql is the ClickBench original unless a note
+# says otherwise. Task ids keep the ClickBench query number so provenance is
+# checkable against https://github.com/ClickHouse/ClickBench.
+- id: clickbench_nl_000
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many page views were recorded in total?"
+  gold_sql: |
+    SELECT COUNT(*) FROM hits
+  difficulty: easy
+  tags: [count, full_scan, clickbench_original]
+
+- id: clickbench_nl_001
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many page views arrived through an advertising network?"
+  gold_sql: |
+    SELECT COUNT(*) FROM hits WHERE AdvEngineID <> 0
+  difficulty: easy
+  tags: [count, filter, clickbench_original]
+  notes: >-
+    AdvEngineID is 0 for organic traffic, not NULL. A model that writes
+    "IS NOT NULL" returns the whole table - this is the cheapest test of
+    schema-semantics grounding in the suite.
+
+- id: clickbench_nl_002
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Across every hit, give the total of the advertising engine ids, the number
+    of hits, and the average screen resolution width.
+  gold_sql: |
+    SELECT SUM(AdvEngineID), COUNT(*), AVG(ResolutionWidth) FROM hits
+  difficulty: easy
+  tags: [aggregate, multi_column, clickbench_original]
+  notes: >-
+    Summing an id column is analytically meaningless; it is in ClickBench as a
+    throughput probe. Kept verbatim so the ClickBench-derived arm stays a true
+    translation, and tagged so the contamination analysis can isolate it.
+
+- id: clickbench_nl_003
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "What is the mean visitor id across all hits?"
+  gold_sql: |
+    SELECT AVG(UserID) FROM hits
+  difficulty: easy
+  tags: [aggregate, clickbench_original]
+
+- id: clickbench_nl_004
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many distinct visitors are in the dataset?"
+  gold_sql: |
+    SELECT COUNT(DISTINCT UserID) FROM hits
+  difficulty: easy
+  tags: [distinct, high_cardinality, clickbench_original]
+  notes: >-
+    ClickHouse's uniq() is an approximation and COUNT(DISTINCT) is exact; they
+    disagree, so a model that reaches for uniq() here is scored incorrect.
+    That is intentional - the question asks how many, not roughly how many.
+
+- id: clickbench_nl_005
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many different search phrases appear in the log?"
+  gold_sql: |
+    SELECT COUNT(DISTINCT SearchPhrase) FROM hits
+  difficulty: easy
+  tags: [distinct, high_cardinality, clickbench_original]
+  notes: >-
+    The empty string counts as a phrase here, because the ClickBench original
+    does not filter it. Q12 does filter it - the pair tests whether a model
+    invents a filter nobody asked for.
+
+- id: clickbench_nl_006
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "What date range does the data cover?"
+  gold_sql: |
+    SELECT MIN(EventDate), MAX(EventDate) FROM hits
+  difficulty: easy
+  tags: [aggregate, date, sort_key_prefix, clickbench_original]

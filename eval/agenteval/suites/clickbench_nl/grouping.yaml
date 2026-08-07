@@ -1,0 +1,132 @@
+# ClickBench Q7-Q14 — grouped top-N.
+#
+# Every ClickBench top-N query orders by a measure alone, so rows that tie on
+# that measure come back in an arbitrary order and the tenth row is not a fact.
+# Gold here appends the grouping keys to ORDER BY, which fixes an order without
+# changing which rows are in the answer. Tasks carrying that change are tagged
+# `tiebroken` so the report can show them separately from untouched originals.
+- id: clickbench_nl_007
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For each advertising network that actually delivered traffic, how many hits
+    did it bring? List the busiest first.
+  gold_sql: |
+    SELECT AdvEngineID, COUNT(*) FROM hits
+    WHERE AdvEngineID <> 0
+    GROUP BY AdvEngineID
+    ORDER BY COUNT(*) DESC, AdvEngineID
+  difficulty: medium
+  tags: [group_by, filter, order_by, tiebroken]
+
+- id: clickbench_nl_008
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which ten regions have the most unique visitors?"
+  gold_sql: |
+    SELECT RegionID, COUNT(DISTINCT UserID) AS u FROM hits
+    GROUP BY RegionID
+    ORDER BY u DESC, RegionID
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, distinct, top_n, tiebroken]
+
+- id: clickbench_nl_009
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For the ten busiest regions by hit count, show the total of their
+    advertising engine ids, the hit count, the average screen resolution width,
+    and how many unique visitors they had.
+  gold_sql: |
+    SELECT RegionID, SUM(AdvEngineID), COUNT(*) AS c, AVG(ResolutionWidth),
+           COUNT(DISTINCT UserID)
+    FROM hits
+    GROUP BY RegionID
+    ORDER BY c DESC, RegionID
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, distinct, top_n, multi_column, tiebroken]
+
+- id: clickbench_nl_010
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Among hits from a known phone model, which ten models had the most unique
+    visitors?
+  gold_sql: |
+    SELECT MobilePhoneModel, COUNT(DISTINCT UserID) AS u FROM hits
+    WHERE MobilePhoneModel <> ''
+    GROUP BY MobilePhoneModel
+    ORDER BY u DESC, MobilePhoneModel
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, distinct, top_n, empty_string_sentinel, tiebroken]
+  notes: >-
+    "Unknown" is the empty string, not NULL. A model that writes
+    "MobilePhoneModel IS NOT NULL" gets every row back.
+
+- id: clickbench_nl_011
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For each handset - vendor and model together - among hits with a known
+    model, which ten had the most unique visitors?
+  gold_sql: |
+    SELECT MobilePhone, MobilePhoneModel, COUNT(DISTINCT UserID) AS u FROM hits
+    WHERE MobilePhoneModel <> ''
+    GROUP BY MobilePhone, MobilePhoneModel
+    ORDER BY u DESC, MobilePhone, MobilePhoneModel
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, distinct, top_n, empty_string_sentinel, tiebroken]
+  notes: >-
+    MobilePhone is a vendor code, not a boolean and not a number to compare
+    against zero.
+
+- id: clickbench_nl_012
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "What are the ten most frequent search phrases, ignoring hits with no search?"
+  gold_sql: |
+    SELECT SearchPhrase, COUNT(*) AS c FROM hits
+    WHERE SearchPhrase <> ''
+    GROUP BY SearchPhrase
+    ORDER BY c DESC, SearchPhrase
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, high_cardinality, empty_string_sentinel, tiebroken]
+
+- id: clickbench_nl_013
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Which ten search phrases were used by the most distinct visitors, ignoring
+    hits with no search?
+  gold_sql: |
+    SELECT SearchPhrase, COUNT(DISTINCT UserID) AS u FROM hits
+    WHERE SearchPhrase <> ''
+    GROUP BY SearchPhrase
+    ORDER BY u DESC, SearchPhrase
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, distinct, top_n, high_cardinality, tiebroken]
+  notes: >-
+    Differs from Q12 only in counting visitors instead of hits. The pair
+    separates models that read the question from models that pattern-match the
+    phrase "most popular search".
+
+- id: clickbench_nl_014
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Which ten search engine and search phrase combinations occur most often,
+    ignoring hits with no search?
+  gold_sql: |
+    SELECT SearchEngineID, SearchPhrase, COUNT(*) AS c FROM hits
+    WHERE SearchPhrase <> ''
+    GROUP BY SearchEngineID, SearchPhrase
+    ORDER BY c DESC, SearchEngineID, SearchPhrase
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, high_cardinality, tiebroken]

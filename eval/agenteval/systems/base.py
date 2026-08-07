@@ -111,6 +111,11 @@ class Attempt:
     task_id: str
     seed: int
     model: ModelSpec | None = None
+    prompt: str | None = None
+    """The grounded payload the system sent. Committed to the trace (SPEC §11.4)
+    and deliberately absent from :class:`BlindAttempt`, since a prompt names the
+    arm that wrote it."""
+
     queries: tuple[EmittedQuery, ...] = ()
     tokens: TokenUsage = TokenUsage()
     context_bytes: int = 0
@@ -140,12 +145,22 @@ class SystemUnderTest(Protocol):
     ``version`` and ``config_fingerprint`` are not bookkeeping: every row of the
     Family S leaderboard carries them, because a benchmark of a moving beta
     product is meaningless without saying exactly what was measured.
+
+    They are declared read-only so an implementation can be a frozen dataclass:
+    a system's identity must not drift halfway through a run.
     """
 
-    name: str
-    version: str
-    controls_model: bool
-    config_fingerprint: str
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def version(self) -> str: ...
+
+    @property
+    def controls_model(self) -> bool: ...
+
+    @property
+    def config_fingerprint(self) -> str: ...
 
     async def answer(self, task: Task, model: ModelSpec | None, seed: int) -> Attempt:
         """Answer ``task`` once, returning every query emitted along the way."""

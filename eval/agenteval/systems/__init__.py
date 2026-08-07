@@ -16,6 +16,8 @@ from agenteval.systems.base import (
     SystemUnderTest,
     TokenUsage,
 )
+from agenteval.systems.fingerprint import config_fingerprint
+from agenteval.systems.raw_schema import RawSchemaSystem
 
 __all__ = [
     "Attempt",
@@ -23,6 +25,8 @@ __all__ = [
     "EmittedQuery",
     "ErrorClass",
     "ModelSpec",
+    "RawSchemaSystem",
     "SystemUnderTest",
     "TokenUsage",
+    "config_fingerprint",
 ]

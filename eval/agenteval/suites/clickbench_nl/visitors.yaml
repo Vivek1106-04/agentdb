@@ -1,0 +1,81 @@
+# ClickBench Q15-Q20 — per-visitor grouping, point lookups, and URL matching.
+#
+# ClickBench Q17 is deliberately absent: it is Q16 without an ORDER BY, so its
+# ten rows are whichever ten the engine happened to produce. There is no gold
+# result to commit, and a benchmark cannot grade an answer that has none.
+- id: clickbench_nl_015
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which ten visitors generated the most page views?"
+  gold_sql: |
+    SELECT UserID, COUNT(*) FROM hits
+    GROUP BY UserID
+    ORDER BY COUNT(*) DESC, UserID
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, high_cardinality, sort_key_prefix, tiebroken]
+  notes: >-
+    UserID is the third column of the sort key, so grouping by it alone cannot
+    use the primary index prefix - the layout arm should show up here.
+
+- id: clickbench_nl_016
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Which ten visitor and search phrase pairs occur most often? Include hits
+    with no search phrase.
+  gold_sql: |
+    SELECT UserID, SearchPhrase, COUNT(*) FROM hits
+    GROUP BY UserID, SearchPhrase
+    ORDER BY COUNT(*) DESC, UserID, SearchPhrase
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, high_cardinality, tiebroken]
+  notes: >-
+    "Include hits with no search phrase" is stated because the ClickBench
+    original has no filter and the neighbouring queries do. Without it the
+    question is ambiguous and the task would be grading a coin flip.
+
+- id: clickbench_nl_018
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Broken down by visitor, by the minute of the hour the hit occurred, and by
+    search phrase, which ten combinations occur most often?
+  gold_sql: |
+    SELECT UserID, EXTRACT(MINUTE FROM EventTime) AS m, SearchPhrase, COUNT(*)
+    FROM hits
+    GROUP BY UserID, m, SearchPhrase
+    ORDER BY COUNT(*) DESC, UserID, m, SearchPhrase
+    LIMIT 10
+  difficulty: hard
+  tags: [group_by, top_n, high_cardinality, date_part, tiebroken]
+  notes: >-
+    "Minute of the hour" is 0-59, not a truncation to the minute. EventTime is
+    a DateTime; EventDate is a separate column and is the one in the sort key.
+
+- id: clickbench_nl_019
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Return the visitor id column for every hit belonging to visitor 435090932899640449."
+  gold_sql: |
+    SELECT UserID FROM hits WHERE UserID = 435090932899640449
+  difficulty: easy
+  tags: [point_lookup, sort_key_suffix, clickbench_original]
+  notes: >-
+    A point lookup on the third sort-key column: ClickHouse cannot use the
+    primary index prefix, so this reads far more than its selectivity suggests.
+    Bytes read is the interesting metric here, not accuracy.
+
+- id: clickbench_nl_020
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits have a URL containing the text 'google'?"
+  gold_sql: |
+    SELECT COUNT(*) FROM hits WHERE URL LIKE '%google%'
+  difficulty: easy
+  tags: [count, filter, substring_match, clickbench_original]
+  notes: >-
+    Case-sensitive and unanchored, as written. A model that reaches for
+    positionCaseInsensitive or a domain extraction answers a different
+    question and is scored incorrect.
