@@ -52,10 +52,10 @@ seed: ## Reload seed data into the running engines (extensions load on first sta
 		--queries-file /docker-entrypoint-initdb.d/00-init.sql
 
 bench: ## Full benchmark matrix; writes results/
-	$(RUN) python -m agenteval.runner --all
+	$(RUN) python -m agenteval
 
-bench-quick: ## 10-task subset a stranger can run in five minutes
-	$(RUN) python -m agenteval.runner --quick
+bench-quick: ## Small subset a stranger can run in five minutes
+	$(RUN) python -m agenteval --quick
 
 report: ## Regenerate REPORT.md and charts from committed traces (no model calls)
 	$(RUN) python -m agenteval.report --from-raw results/raw

@@ -51,7 +51,11 @@ class Turn:
 class ModelClient(Protocol):
     """Anything that can turn a conversation into text."""
 
-    provider: str
+    @property
+    def provider(self) -> str:
+        """Recorded against every attempt, so read-only for the same reason the
+        system's identity is."""
+        ...
 
     async def complete(
         self,

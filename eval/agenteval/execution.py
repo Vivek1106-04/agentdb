@@ -27,7 +27,11 @@ class QueryExecutor(Protocol):
     whether it is safe has no safety property at all (SPEC §4.1.3).
     """
 
-    engine: Engine
+    @property
+    def engine(self) -> Engine:
+        """Which engine this executor talks to. Read-only: an executor that
+        changed engines mid-run would silently mix two sets of numbers."""
+        ...
 
     async def schema_text(self, namespace: str) -> str:
         """The ``CREATE TABLE`` DDL for ``namespace``, as the A0 arm shows it."""
