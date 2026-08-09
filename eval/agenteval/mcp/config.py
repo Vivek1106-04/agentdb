@@ -50,6 +50,13 @@ class McpServerConfig:
     tools: tuple[str, ...] = ()
     """Tools the arm may call. Empty means whatever the server advertises."""
 
+    query_tools: tuple[str, ...] = ()
+    """Tools whose invocation *is* the system emitting SQL. The harness reads the
+    query out of the call so a third-party server's SQL lands in the trace."""
+
+    query_argument: str = "query"
+    """Which argument of a query tool carries the SQL."""
+
     def __post_init__(self) -> None:
         if not self.name:
             raise McpConfigError("an MCP server config needs a name")
@@ -78,6 +85,8 @@ class McpServerConfig:
             "env": dict(self.env),
             "env_passthrough": dict.fromkeys(self.env_passthrough, REDACTED),
             "tools": list(self.tools),
+            "query_tools": list(self.query_tools),
+            "query_argument": self.query_argument,
         }
 
     @property
@@ -87,7 +96,17 @@ class McpServerConfig:
 
 def parse_server(payload: Mapping[str, Any]) -> McpServerConfig:
     """Build one config from a mapping, rejecting anything unrecognised."""
-    allowed = {"name", "version", "command", "args", "env", "env_passthrough", "tools"}
+    allowed = {
+        "name",
+        "version",
+        "command",
+        "args",
+        "env",
+        "env_passthrough",
+        "tools",
+        "query_tools",
+        "query_argument",
+    }
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise McpConfigError(f"MCP server config has unknown field(s): {', '.join(unknown)}")
@@ -104,6 +123,8 @@ def parse_server(payload: Mapping[str, Any]) -> McpServerConfig:
         env_passthrough=_strings(payload.get("env_passthrough", ())),
         env={str(k): str(v) for k, v in dict(payload.get("env", {})).items()},
         tools=_strings(payload.get("tools", ())),
+        query_tools=_strings(payload.get("query_tools", ())),
+        query_argument=str(payload.get("query_argument", "query")),
     )
 
 

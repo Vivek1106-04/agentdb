@@ -15,20 +15,27 @@ not reproducible.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from agenteval.engines.clickhouse import ClickHouseExecutor
 from agenteval.engines.connect import ClickHouseTarget, build_client
 from agenteval.execution import QueryExecutor
 from agenteval.freeze import compute_gold_hashes, write_gold_lock
+from agenteval.mcp.base import McpSession
+from agenteval.mcp.config import McpServerConfig, load_servers
+from agenteval.mcp.stdio import connect
 from agenteval.models.anthropic import PROVIDER, AnthropicClient, build_create
+from agenteval.models.anthropic_tools import AnthropicToolClient, MessageCreateWithTools
 from agenteval.models.base import ModelClient
+from agenteval.models.tools import ToolUsingClient
 from agenteval.report import load_run, render
 from agenteval.runner import Cell, RunSpec, new_run_id, run
 from agenteval.suites import SUITES_DIR, load_builtin
 from agenteval.systems.base import ModelSpec, SystemUnderTest
+from agenteval.systems.mcp_generic import McpSystem
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
 from agenteval.systems.oracle import OracleSystem
 from agenteval.systems.raw_schema import ARM_NAME as BASELINE_ARM
@@ -38,6 +45,7 @@ from agenteval.traces import TraceWriter
 DEFAULT_SUITE = "clickbench_nl"
 DEFAULT_MODEL = f"{PROVIDER}/claude-opus-5"
 DEFAULT_RAW = Path("results/raw")
+DEFAULT_SERVERS = Path("eval/servers.yaml")
 DEFAULT_REPORT = Path("results/REPORT.md")
 
 QUICK_TASKS = 5
@@ -55,6 +63,8 @@ Writer = Callable[[str], None]
 
 ExecutorFactory = Callable[[], Awaitable[QueryExecutor]]
 ClientFactory = Callable[[], ModelClient]
+ToolClientFactory = Callable[[], ToolUsingClient]
+Connector = Callable[[McpServerConfig], Awaitable[McpSession]]
 
 
 class CliError(RuntimeError):
@@ -71,6 +81,7 @@ class BenchOptions:
     seeds: tuple[int, ...] = (0, 1, 2, 3, 4)
     limit: int | None = None
     out: Path = DEFAULT_RAW
+    servers: Path = DEFAULT_SERVERS
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +116,9 @@ def parse_args(argv: Sequence[str]) -> Command:
     bench.add_argument("--limit", type=int, default=None, help="first N tasks only")
     bench.add_argument("--quick", action="store_true", help=f"{QUICK_TASKS} tasks, one seed")
     bench.add_argument("--out", type=Path, default=DEFAULT_RAW, help="trace directory")
+    bench.add_argument(
+        "--servers", type=Path, default=DEFAULT_SERVERS, help="Family S server configs"
+    )
 
     report = commands.add_parser("report", help="regenerate REPORT.md from traces")
     report.add_argument("--from-raw", type=Path, default=DEFAULT_RAW, dest="from_raw")
@@ -130,6 +144,7 @@ def parse_args(argv: Sequence[str]) -> Command:
         seeds=(0,) if args.quick else tuple(range(args.seeds)),
         limit=QUICK_TASKS if args.quick else args.limit,
         out=args.out,
+        servers=args.servers,
     )
 
 
@@ -150,14 +165,46 @@ def parse_model(spec: str) -> ModelSpec:
     return ModelSpec(provider=provider, name=name)
 
 
-def build_systems(
-    arms: Sequence[str], executor: QueryExecutor, client: ModelClient
+def load_server_configs(path: Path) -> dict[str, McpServerConfig]:
+    """Family S servers, by arm name. A missing file simply means no S arms."""
+    if not path.is_file():
+        return {}
+    return {server.name: server for server in load_servers(path)}
+
+
+async def build_systems(
+    arms: Sequence[str],
+    executor: QueryExecutor,
+    *,
+    client: ModelClient,
+    tool_client: ToolUsingClient,
+    servers: Mapping[str, McpServerConfig],
+    connector: Connector,
+    sessions: list[McpSession],
 ) -> tuple[SystemUnderTest, ...]:
-    """Construct each named arm, refusing names that do not exist yet."""
-    unknown = [arm for arm in arms if arm not in ARMS]
+    """Construct each named arm, refusing names that do not exist yet.
+
+    Every MCP session opened is appended to ``sessions`` so the caller can close
+    them even when the run fails: a leaked server process poisons the next
+    arm's timings.
+    """
+    unknown = [arm for arm in arms if arm not in ARMS and arm not in servers]
     if unknown:
-        raise CliError(f"unknown arm(s) {unknown}; available: {sorted(ARMS)}")
-    return tuple(ARMS[arm](executor, client) for arm in arms)
+        raise CliError(f"unknown arm(s) {unknown}; available: {sorted({*ARMS, *servers})}")
+
+    built: list[SystemUnderTest] = []
+    for arm in arms:
+        if arm in ARMS:
+            built.append(ARMS[arm](executor, client))
+            continue
+        session = await connector(servers[arm])
+        sessions.append(session)
+        built.append(
+            await McpSystem.create(
+                session=session, client=tool_client, executor=executor, config=servers[arm]
+            )
+        )
+    return tuple(built)
 
 
 def summarize(cells: Sequence[Cell]) -> tuple[str, ...]:
@@ -176,26 +223,43 @@ async def run_bench(
     executor_factory: ExecutorFactory,
     client_factory: ClientFactory,
     write: Writer,
+    tool_client_factory: ToolClientFactory | None = None,
+    connector: Connector = connect,
 ) -> tuple[Cell, ...]:
     """Build everything the options name, run it, and report."""
+    tool_client_factory = tool_client_factory or default_tool_client
     suite = load_builtin(options.suite)
     if options.limit is not None:
         suite = suite.subset(options.limit)
 
     executor = await executor_factory()
-    systems = build_systems(options.arms, executor, client_factory())
-    run_id = new_run_id()
-    spec = RunSpec(
-        suite=suite,
-        systems=systems,
-        models=tuple(parse_model(model) for model in options.models),
-        run_id=run_id,
-        seeds=options.seeds,
-    )
-    writer = TraceWriter(path=options.out / f"{run_id}.jsonl")
+    sessions: list[McpSession] = []
+    try:
+        systems = await build_systems(
+            options.arms,
+            executor,
+            client=client_factory(),
+            tool_client=tool_client_factory(),
+            servers=load_server_configs(options.servers),
+            connector=connector,
+            sessions=sessions,
+        )
+        run_id = new_run_id()
+        spec = RunSpec(
+            suite=suite,
+            systems=systems,
+            models=tuple(parse_model(model) for model in options.models),
+            run_id=run_id,
+            seeds=options.seeds,
+        )
+        writer = TraceWriter(path=options.out / f"{run_id}.jsonl")
 
-    write(f"{run_id}: {len(suite)} tasks x {len(systems)} arm(s) x {len(spec.models)} model(s)")
-    cells = await run(spec, executor, writer=writer)
+        write(f"{run_id}: {len(suite)} tasks x {len(systems)} arm(s) x {len(spec.models)} model(s)")
+        cells = await run(spec, executor, writer=writer)
+    finally:
+        for session in sessions:
+            await session.close()
+
     for line in summarize(cells):
         write(line)
     write(f"traces: {writer.path}")
@@ -232,3 +296,8 @@ async def default_executor() -> QueryExecutor:
 
 def default_client() -> ModelClient:
     return AnthropicClient(create=build_create())
+
+
+def default_tool_client() -> ToolUsingClient:
+    """The same Messages endpoint, typed for the call shape that carries tools."""
+    return AnthropicToolClient(create=cast(MessageCreateWithTools, build_create()))

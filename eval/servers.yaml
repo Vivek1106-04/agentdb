@@ -1,0 +1,26 @@
+# Third-party MCP servers under test (SPEC §11.5, Family S).
+#
+# Versions are pinned and printed in the report: a benchmark of a moving beta
+# product is meaningless without saying exactly which build was measured.
+# Secrets are named here and read from the environment at launch — never stored,
+# never written to a trace.
+#
+# Every server is run in its default configuration unless a note says otherwise,
+# and any deviation belongs in that note rather than in a footnote nobody reads.
+
+- name: S1_mcp_clickhouse
+  version: "0.1.12"
+  command: uvx
+  args: ["--from", "mcp-clickhouse==0.1.12", "mcp-clickhouse"]
+  env:
+    CLICKHOUSE_HOST: localhost
+    CLICKHOUSE_PORT: "58123"
+    CLICKHOUSE_USER: agentdb_ro
+    CLICKHOUSE_SECURE: "false"
+    CLICKHOUSE_DATABASE: agentdb
+  env_passthrough: []
+  # Left empty so the arm gets the server's default toolset. Narrowing it would
+  # measure a differently-equipped system than the one users actually install.
+  tools: []
+  query_tools: ["run_select_query"]
+  query_argument: query

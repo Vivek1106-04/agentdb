@@ -17,15 +17,16 @@ from agenteval.systems.base import (
     TokenUsage,
 )
 from agenteval.systems.fingerprint import config_fingerprint
-from agenteval.systems.raw_schema import RawSchemaSystem
 
+# Concrete arms are imported from their own modules, never re-exported here: an
+# arm imports the model layer, the model layer imports these value types, and a
+# package that pulled the arms in eagerly would close that loop.
 __all__ = [
     "Attempt",
     "BlindAttempt",
     "EmittedQuery",
     "ErrorClass",
     "ModelSpec",
-    "RawSchemaSystem",
     "SystemUnderTest",
     "TokenUsage",
     "config_fingerprint",

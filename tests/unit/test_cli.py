@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -17,6 +20,8 @@ from agenteval.cli import (
     build_systems,
     default_client,
     default_executor,
+    default_tool_client,
+    load_server_configs,
     parse_args,
     parse_model,
     run_bench,
@@ -25,10 +30,14 @@ from agenteval.cli import (
 )
 from agenteval.engines.connect import EngineConnectionError
 from agenteval.execution import QueryExecutor
+from agenteval.mcp.base import McpSession, ToolResult, ToolSpec
+from agenteval.mcp.config import McpServerConfig, parse_server
 from agenteval.models.base import ModelClient, ModelError
+from agenteval.models.tools import ToolResponse
 from agenteval.report import ReportError
 from agenteval.runner import Cell
 from agenteval.scorer import Score
+from agenteval.systems.base import SystemUnderTest
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
 from agenteval.systems.raw_schema import ARM_NAME
 from agenteval.traces import read_records
@@ -127,15 +136,94 @@ def test_a_provider_with_no_adapter_is_refused() -> None:
         parse_model("openai/gpt-5")
 
 
-def test_both_shipped_arms_are_constructible() -> None:
-    systems = build_systems([ARM_NAME, ORACLE_ARM], FakeExecutor(), ScriptedModelClient())
+async def _build(arms: list[str], **overrides: object) -> tuple[SystemUnderTest, ...]:
+    defaults: dict[str, Any] = {
+        "client": ScriptedModelClient(),
+        "tool_client": StubToolClient(),
+        "servers": {},
+        "connector": _refuse_to_connect,
+        "sessions": [],
+    }
+    return await build_systems(arms, FakeExecutor(), **{**defaults, **overrides})
+
+
+async def _refuse_to_connect(config: McpServerConfig) -> McpSession:
+    raise AssertionError("no MCP session should be opened for a local arm")
+
+
+@dataclass
+class StubToolClient:
+    provider: str = "fake"
+
+    async def complete_with_tools(self, **kwargs: object) -> ToolResponse:
+        return ToolResponse(text="")
+
+
+async def test_both_shipped_arms_are_constructible() -> None:
+    systems = await _build([ARM_NAME, ORACLE_ARM])
 
     assert [system.name for system in systems] == [ARM_NAME, ORACLE_ARM]
 
 
-def test_an_arm_that_does_not_exist_yet_is_named() -> None:
+async def test_an_arm_that_does_not_exist_yet_is_named() -> None:
     with pytest.raises(CliError, match="unknown arm\\(s\\) \\['A9_future'\\]"):
-        build_systems(["A9_future"], FakeExecutor(), ScriptedModelClient())
+        await _build(["A9_future"])
+
+
+async def test_a_family_s_arm_is_built_from_its_server_config() -> None:
+    opened: list[McpSession] = []
+    server = parse_server({"name": "S1_mcp_clickhouse", "version": "0.1.12", "command": "uvx"})
+
+    async def connector(config: McpServerConfig) -> McpSession:
+        return StubSession()
+
+    systems = await _build(
+        ["S1_mcp_clickhouse"],
+        servers={"S1_mcp_clickhouse": server},
+        connector=connector,
+        sessions=opened,
+    )
+
+    assert [system.name for system in systems] == ["S1_mcp_clickhouse"]
+    assert len(opened) == 1
+
+
+async def test_every_opened_session_is_handed_back_for_closing() -> None:
+    # A leaked server process poisons the next arm's timings
+    sessions: list[McpSession] = []
+    server = parse_server({"name": "S1", "version": "1", "command": "uvx"})
+
+    async def connector(config: McpServerConfig) -> McpSession:
+        return StubSession()
+
+    await _build(["S1"], servers={"S1": server}, connector=connector, sessions=sessions)
+
+    assert len(sessions) == 1
+
+
+@dataclass
+class StubSession:
+    closed: bool = False
+
+    async def list_tools(self) -> tuple[ToolSpec, ...]:
+        return (ToolSpec(name="run_select_query"),)
+
+    async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> ToolResult:
+        return ToolResult(content="")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def test_server_configs_load_from_the_shipped_file() -> None:
+    servers = load_server_configs(Path("eval/servers.yaml"))
+
+    assert "S1_mcp_clickhouse" in servers
+    assert servers["S1_mcp_clickhouse"].query_tools == ("run_select_query",)
+
+
+def test_a_missing_server_file_simply_means_no_family_s(tmp_path: Path) -> None:
+    assert load_server_configs(tmp_path / "nope.yaml") == {}
 
 
 def test_the_summary_reports_execution_accuracy_per_arm() -> None:
@@ -179,7 +267,12 @@ async def _run(options: BenchOptions, lines: list[str]) -> tuple[Cell, ...]:
         return client
 
     return await run_bench(
-        options, executor_factory=make_executor, client_factory=make_client, write=lines.append
+        options,
+        executor_factory=make_executor,
+        client_factory=make_client,
+        write=lines.append,
+        tool_client_factory=StubToolClient,
+        connector=_refuse_to_connect,
     )
 
 
@@ -271,6 +364,13 @@ def test_the_default_client_needs_an_api_key(monkeypatch: pytest.MonkeyPatch) ->
 
     with pytest.raises(ModelError):
         default_client()
+
+
+def test_the_default_tool_client_needs_an_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with pytest.raises(ModelError):
+        default_tool_client()
 
 
 def test_a_setup_failure_exits_distinctly_from_a_crash(
