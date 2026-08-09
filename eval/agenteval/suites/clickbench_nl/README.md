@@ -5,7 +5,9 @@ answers them as gold. ClickBench ships 43 SQL queries and no questions; this
 suite supplies the missing half, so an agent stack can be measured on the same
 data an engine benchmark uses.
 
-- **Table:** `hits` — 105 columns, ~99,997,497 rows, `ORDER BY (CounterID, EventDate, UserID)`.
+- **Table:** `hits` — 105 columns, ~99,997,497 rows, sorted by
+  `(CounterID, EventDate, UserID, EventTime, WatchID)` and unpartitioned, per
+  ClickBench's own `create.sql`. Load it with `make load-clickbench`.
 - **Engine:** ClickHouse. TPC-H (`tpch_nl`) carries the cross-engine arm.
 - **Provenance:** task ids keep the ClickBench query number
   (`clickbench_nl_007` ↔ ClickBench Q7), so any translation can be checked

@@ -2,7 +2,7 @@
 UV ?= uv
 RUN := $(UV) run
 
-.PHONY: help install fmt lint typecheck arch test test-unit test-contract test-e2e check up down seed bench bench-quick report demo clean
+.PHONY: help install fmt lint typecheck arch test test-unit test-contract test-e2e check up down seed load-clickbench bench bench-quick report demo clean
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -50,6 +50,19 @@ seed: ## Reload seed data into the running engines (extensions load on first sta
 	docker compose -f docker/docker-compose.yml exec -T clickhouse \
 		clickhouse-client --user agentdb --password agentdb --multiquery \
 		--queries-file /docker-entrypoint-initdb.d/00-init.sql
+
+CLICKBENCH_PARTS ?= 1  # 1 part ~= 1M rows; 100 parts is the full ~99,997,497
+CH := docker compose -f docker/docker-compose.yml exec -T clickhouse \
+	clickhouse-client --user agentdb --password agentdb --database agentdb
+
+load-clickbench: ## Load the ClickBench hits table (CLICKBENCH_PARTS=100 for the full set)
+	@echo "creating hits from ClickBench's own DDL..."
+	@curl -fsS https://raw.githubusercontent.com/ClickHouse/ClickBench/main/clickhouse/create.sql \
+		| $(CH) --multiquery
+	@echo "loading $(CLICKBENCH_PARTS) parquet part(s)..."
+	@$(CH) --query "INSERT INTO hits SELECT * FROM url('https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_{0..$(shell expr $(CLICKBENCH_PARTS) - 1)}.parquet', Parquet) SETTINGS max_http_get_redirects=10, input_format_null_as_default=1"
+	@$(CH) --query "SELECT count() AS rows, formatReadableSize(sum(bytes_on_disk)) AS size FROM system.parts WHERE table='hits' AND active" 2>/dev/null || true
+	@$(CH) --query "SELECT count() FROM hits"
 
 bench: ## Full benchmark matrix; writes results/
 	$(RUN) python -m agenteval
