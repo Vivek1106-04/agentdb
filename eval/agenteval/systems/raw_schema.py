@@ -14,13 +14,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from time import perf_counter
 
 from agenteval.execution import QueryExecutor
-from agenteval.models.base import ModelClient, ModelError, Turn
-from agenteval.models.extract import extract_sql
-from agenteval.systems.base import Attempt, EmittedQuery, ModelSpec, TokenUsage
+from agenteval.models.base import ModelClient, ModelError
+from agenteval.systems.base import Attempt, ModelSpec
 from agenteval.systems.fingerprint import config_fingerprint
+from agenteval.systems.loop import answer_with_model
 from agenteval.tasks import Engine, Task
 
 ARM_NAME = "A0_baseline"
@@ -44,13 +43,6 @@ _QUESTION_TURN = """These are the tables available:
 
 Question: {question}"""
 
-_RETRY_TURN = """That query failed.
-
-error_class: {error_class}
-error: {error_text}
-
-Reply with one corrected SQL query."""
-
 
 def build_system_prompt(engine: Engine) -> str:
     """The system prompt for ``engine``. Identical across arms, so arms stay comparable."""
@@ -60,17 +52,6 @@ def build_system_prompt(engine: Engine) -> str:
 def build_question_turn(task: Task, schema: str) -> str:
     """The A0 payload: DDL and the question, and deliberately nothing else."""
     return _QUESTION_TURN.format(schema=schema, question=task.question)
-
-
-def build_retry_turn(query: EmittedQuery) -> str:
-    """What the model is told after a failed query.
-
-    It gets the engine's own error text: withholding it would measure blind
-    guessing, and no real deployment withholds it.
-    """
-    return _RETRY_TURN.format(
-        error_class=query.error_class, error_text=query.error_text or "no detail"
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,46 +103,16 @@ class RawSchemaSystem:
         if model is None:
             raise ModelError(f"{ARM_NAME} chooses no model of its own; pass a ModelSpec")
 
-        started = perf_counter()
         schema = await self.executor.schema_text(task.namespace)
-        system_prompt = build_system_prompt(self.executor.engine)
-
-        question_turn = build_question_turn(task, schema)
-        turns: list[Turn] = [Turn(role="user", content=question_turn)]
-        queries: list[EmittedQuery] = []
-        notes: list[str] = []
-        input_tokens = 0
-        output_tokens = 0
-
-        for _ in range(self.max_retries + 1):
-            response = await self.client.complete(
-                system=system_prompt, turns=tuple(turns), model=model, seed=seed
-            )
-            input_tokens += response.tokens.input_tokens
-            output_tokens += response.tokens.output_tokens
-
-            sql = extract_sql(response.text)
-            if sql is None:
-                notes.append("the model replied without a SQL query")
-                break
-
-            emitted = await self.executor.run(sql)
-            queries.append(emitted)
-            if emitted.succeeded:
-                break
-
-            turns.append(Turn(role="assistant", content=response.text))
-            turns.append(Turn(role="user", content=build_retry_turn(emitted)))
-
-        return Attempt(
-            system=self.name,
-            task_id=task.id,
-            seed=seed,
+        return await answer_with_model(
+            system_name=self.name,
+            task=task,
             model=model,
-            prompt=f"{system_prompt}\n\n{question_turn}",
-            queries=tuple(queries),
-            tokens=TokenUsage(input_tokens=input_tokens, output_tokens=output_tokens),
+            seed=seed,
+            executor=self.executor,
+            client=self.client,
+            system_prompt=build_system_prompt(self.executor.engine),
+            first_turn=build_question_turn(task, schema),
             context_bytes=len(schema.encode("utf-8")),
-            wall_clock_ms=round((perf_counter() - started) * 1000),
-            notes=tuple(notes),
+            max_retries=self.max_retries,
         )

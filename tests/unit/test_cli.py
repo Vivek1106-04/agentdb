@@ -10,32 +10,46 @@ from agenteval.__main__ import EXIT_OK, EXIT_USAGE, main
 from agenteval.cli import (
     DEFAULT_MODEL,
     QUICK_TASKS,
+    BenchOptions,
     CliError,
-    Options,
+    FreezeOptions,
+    ReportOptions,
     build_systems,
     default_client,
     default_executor,
     parse_args,
     parse_model,
-    run_options,
+    run_bench,
+    run_report,
     summarize,
 )
 from agenteval.engines.connect import EngineConnectionError
 from agenteval.execution import QueryExecutor
 from agenteval.models.base import ModelClient, ModelError
+from agenteval.report import ReportError
 from agenteval.runner import Cell
 from agenteval.scorer import Score
+from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
 from agenteval.systems.raw_schema import ARM_NAME
 from agenteval.traces import read_records
 from tests.harness_fakes import FakeExecutor, ScriptedModelClient
+
+GOOD_REPLY = "```sql\nSELECT count() FROM hits\n```"
+
+
+def _bench(argv: list[str]) -> BenchOptions:
+    options = parse_args(argv)
+    assert isinstance(options, BenchOptions)
+    return options
+
 
 # --------------------------------------------------------------------------
 # argument parsing
 # --------------------------------------------------------------------------
 
 
-def test_the_defaults_are_a_full_five_seed_run() -> None:
-    options = parse_args([])
+def test_no_subcommand_still_means_bench() -> None:
+    options = _bench([])
 
     assert options.suite == "clickbench_nl"
     assert options.arms == (ARM_NAME,)
@@ -44,22 +58,26 @@ def test_the_defaults_are_a_full_five_seed_run() -> None:
     assert options.limit is None
 
 
-def test_arms_and_models_are_repeatable() -> None:
-    options = parse_args(["--arm", "A0_baseline", "--model", "a/b", "--model", "a/c"])
+def test_a_bare_flag_still_means_bench() -> None:
+    assert _bench(["--quick"]).limit == QUICK_TASKS
 
-    assert options.arms == ("A0_baseline",)
+
+def test_arms_and_models_are_repeatable() -> None:
+    options = _bench(["bench", "--arm", ARM_NAME, "--model", "a/b", "--model", "a/c"])
+
+    assert options.arms == (ARM_NAME,)
     assert options.models == ("a/b", "a/c")
 
 
 def test_quick_trades_statistical_power_for_five_minutes() -> None:
-    options = parse_args(["--quick"])
+    options = _bench(["--quick"])
 
     assert options.seeds == (0,)
     assert options.limit == QUICK_TASKS
 
 
 def test_seed_count_and_limit_are_explicit() -> None:
-    options = parse_args(["--seeds", "3", "--limit", "2", "--out", "/tmp/x"])
+    options = _bench(["bench", "--seeds", "3", "--limit", "2", "--out", "/tmp/x"])
 
     assert options.seeds == (0, 1, 2)
     assert options.limit == 2
@@ -68,7 +86,22 @@ def test_seed_count_and_limit_are_explicit() -> None:
 
 def test_a_zero_seed_run_is_refused() -> None:
     with pytest.raises(CliError, match="--seeds must be >= 1"):
-        parse_args(["--seeds", "0"])
+        parse_args(["bench", "--seeds", "0"])
+
+
+def test_report_is_its_own_command() -> None:
+    options = parse_args(["report", "--from-raw", "traces", "--baseline", ORACLE_ARM])
+
+    assert isinstance(options, ReportOptions)
+    assert options.from_raw == Path("traces")
+    assert options.baseline == ORACLE_ARM
+
+
+def test_freeze_gold_is_its_own_command() -> None:
+    options = parse_args(["freeze-gold", "--suite", "clickbench_nl"])
+
+    assert isinstance(options, FreezeOptions)
+    assert options.suite == "clickbench_nl"
 
 
 # --------------------------------------------------------------------------
@@ -94,10 +127,10 @@ def test_a_provider_with_no_adapter_is_refused() -> None:
         parse_model("openai/gpt-5")
 
 
-def test_known_arms_are_constructed() -> None:
-    systems = build_systems([ARM_NAME], FakeExecutor(), ScriptedModelClient())
+def test_both_shipped_arms_are_constructible() -> None:
+    systems = build_systems([ARM_NAME, ORACLE_ARM], FakeExecutor(), ScriptedModelClient())
 
-    assert [system.name for system in systems] == [ARM_NAME]
+    assert [system.name for system in systems] == [ARM_NAME, ORACLE_ARM]
 
 
 def test_an_arm_that_does_not_exist_yet_is_named() -> None:
@@ -135,11 +168,9 @@ def test_the_summary_reports_execution_accuracy_per_arm() -> None:
 # --------------------------------------------------------------------------
 
 
-async def test_a_run_writes_traces_and_reports_a_number(tmp_path: Path) -> None:
-    # Arrange — a full pass with no server and no API key
+async def _run(options: BenchOptions, lines: list[str]) -> tuple[Cell, ...]:
     executor = FakeExecutor()
-    client = ScriptedModelClient(replies=["```sql\nSELECT count() FROM hits\n```"] * 4)
-    lines: list[str] = []
+    client = ScriptedModelClient(replies=[GOOD_REPLY] * 40)
 
     async def make_executor() -> QueryExecutor:
         return executor
@@ -147,17 +178,16 @@ async def test_a_run_writes_traces_and_reports_a_number(tmp_path: Path) -> None:
     def make_client() -> ModelClient:
         return client
 
-    options = Options(arms=(ARM_NAME,), seeds=(0,), limit=2, out=tmp_path)
-
-    # Act
-    cells = await run_options(
-        options,
-        executor_factory=make_executor,
-        client_factory=make_client,
-        write=lines.append,
+    return await run_bench(
+        options, executor_factory=make_executor, client_factory=make_client, write=lines.append
     )
 
-    # Assert
+
+async def test_a_run_writes_traces_and_reports_a_number(tmp_path: Path) -> None:
+    lines: list[str] = []
+
+    cells = await _run(BenchOptions(seeds=(0,), limit=2, out=tmp_path), lines)
+
     assert len(cells) == 2
     assert any("EX" in line for line in lines)
     written = list(tmp_path.glob("*.jsonl"))
@@ -165,21 +195,65 @@ async def test_a_run_writes_traces_and_reports_a_number(tmp_path: Path) -> None:
     assert len(read_records(written[0])) == 2
 
 
-async def test_the_limit_is_applied_to_the_suite(tmp_path: Path) -> None:
-    executor = FakeExecutor()
-    client = ScriptedModelClient(replies=["```sql\nSELECT count() FROM hits\n```"] * 10)
-
-    async def make_executor() -> QueryExecutor:
-        return executor
-
-    cells = await run_options(
-        Options(seeds=(0,), limit=1, out=tmp_path),
-        executor_factory=make_executor,
-        client_factory=lambda: client,
-        write=lambda _: None,
+async def test_both_arms_run_in_one_pass(tmp_path: Path) -> None:
+    cells = await _run(
+        BenchOptions(arms=(ARM_NAME, ORACLE_ARM), seeds=(0,), limit=1, out=tmp_path), []
     )
 
-    assert len(cells) == 1
+    assert {cell.system for cell in cells} == {ARM_NAME, ORACLE_ARM}
+
+
+async def test_the_limit_is_applied_to_the_suite(tmp_path: Path) -> None:
+    assert len(await _run(BenchOptions(seeds=(0,), limit=1, out=tmp_path), [])) == 1
+
+
+def test_the_report_command_writes_markdown_from_traces(tmp_path: Path) -> None:
+    # Arrange
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "run.jsonl").write_text(_trace_line(), encoding="utf-8")
+    out = tmp_path / "REPORT.md"
+    lines: list[str] = []
+
+    # Act
+    markdown = run_report(ReportOptions(from_raw=raw, out=out), write=lines.append)
+
+    # Assert
+    assert "# agentdb benchmark results" in markdown
+    assert out.read_text(encoding="utf-8") == markdown
+    assert "1 records" in lines[0]
+
+
+def test_the_report_command_reports_a_missing_trace_directory(tmp_path: Path) -> None:
+    with pytest.raises(ReportError, match="no trace directory"):
+        run_report(ReportOptions(from_raw=tmp_path / "nope"), write=lambda _: None)
+
+
+def _trace_line() -> str:
+    import json
+
+    return json.dumps(
+        {
+            "run_id": "r",
+            "engine": "clickhouse",
+            "suite": "clickbench_nl",
+            "task_id": "t1",
+            "seed": 0,
+            "system": ARM_NAME,
+            "system_version": "1.0",
+            "controls_model": True,
+            "config_fingerprint": "sha256:x",
+            "model": "anthropic/claude-opus-5",
+            "execution_accuracy": True,
+            "accuracy_at_1": True,
+            "valid_sql": True,
+            "retries": 0,
+            "error_class": "none",
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "context_bytes": 100,
+        }
+    )
 
 
 # --------------------------------------------------------------------------
@@ -188,8 +262,6 @@ async def test_the_limit_is_applied_to_the_suite(tmp_path: Path) -> None:
 
 
 async def test_the_default_executor_needs_a_driver_and_a_server() -> None:
-    # The optional extra is not installed in CI, which is the point: the harness
-    # imports and its tests run without one
     with pytest.raises(EngineConnectionError):
         await default_executor()
 
@@ -204,27 +276,66 @@ def test_the_default_client_needs_an_api_key(monkeypatch: pytest.MonkeyPatch) ->
 def test_a_setup_failure_exits_distinctly_from_a_crash(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # Arrange — no ANTHROPIC_API_KEY and no engine: the reader gets one line
-    code = main(["--seeds", "0"])
+    code = main(["bench", "--seeds", "0"])
 
     assert code == EXIT_USAGE
     assert "error:" in capsys.readouterr().err
 
 
-def test_the_success_path_returns_zero(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_options(*args: object, **kwargs: object) -> tuple[()]:
+def test_the_bench_path_returns_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run(*args: object, **kwargs: object) -> tuple[()]:
         return ()
 
-    monkeypatch.setattr("agenteval.__main__.run_options", fake_run_options)
+    monkeypatch.setattr("agenteval.__main__.run_bench", fake_run)
 
     assert main(["--quick"]) == EXIT_OK
 
 
+def test_the_report_path_returns_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("agenteval.__main__.run_report", lambda *a, **k: "")
+
+    assert main(["report"]) == EXIT_OK
+
+
+def test_the_freeze_path_returns_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_freeze(*args: object, **kwargs: object) -> Path:
+        return Path("gold.lock.yaml")
+
+    monkeypatch.setattr("agenteval.__main__.run_freeze", fake_freeze)
+
+    assert main(["freeze-gold"]) == EXIT_OK
+
+
 def test_argv_defaults_to_the_process_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_options(*args: object, **kwargs: object) -> tuple[()]:
+    async def fake_run(*args: object, **kwargs: object) -> tuple[()]:
         return ()
 
-    monkeypatch.setattr("agenteval.__main__.run_options", fake_run_options)
+    monkeypatch.setattr("agenteval.__main__.run_bench", fake_run)
     monkeypatch.setattr("sys.argv", ["agenteval", "--quick"])
 
     assert main() == EXIT_OK
+
+
+async def test_the_freeze_command_writes_a_lock_beside_the_suite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Arrange — redirect the write so a test never edits a shipped suite
+    from agenteval.cli import FreezeOptions as _FreezeOptions
+    from agenteval.cli import run_freeze
+
+    monkeypatch.setattr("agenteval.cli.SUITES_DIR", tmp_path)
+    (tmp_path / "clickbench_nl").mkdir()
+    executor = FakeExecutor()
+    lines: list[str] = []
+
+    async def make_executor() -> QueryExecutor:
+        return executor
+
+    # Act
+    path = await run_freeze(
+        _FreezeOptions(suite="clickbench_nl"), executor_factory=make_executor, write=lines.append
+    )
+
+    # Assert — one hash per shipped ClickHouse task
+    assert path.name == "gold.lock.yaml"
+    assert "froze 20 gold result(s)" in lines[0]

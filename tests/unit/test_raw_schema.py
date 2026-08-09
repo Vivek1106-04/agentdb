@@ -7,11 +7,11 @@ import pytest
 from agenteval.execution import QueryExecutor
 from agenteval.models.base import ModelError
 from agenteval.systems.base import EmittedQuery, SystemUnderTest
+from agenteval.systems.loop import build_retry_turn
 from agenteval.systems.raw_schema import (
     ARM_NAME,
     RawSchemaSystem,
     build_question_turn,
-    build_retry_turn,
     build_system_prompt,
 )
 from tests.harness_fakes import (

@@ -2,7 +2,7 @@
 UV ?= uv
 RUN := $(UV) run
 
-.PHONY: help install fmt lint typecheck arch test test-unit test-contract test-e2e check up down seed load-clickbench bench bench-quick report demo clean
+.PHONY: help install fmt lint typecheck arch test test-unit test-contract test-e2e check up down seed load-clickbench freeze-gold bench bench-quick report demo clean
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -64,14 +64,17 @@ load-clickbench: ## Load the ClickBench hits table (CLICKBENCH_PARTS=100 for the
 	@$(CH) --query "SELECT count() AS rows, formatReadableSize(sum(bytes_on_disk)) AS size FROM system.parts WHERE table='hits' AND active" 2>/dev/null || true
 	@$(CH) --query "SELECT count() FROM hits"
 
+freeze-gold: ## Verify gold against the loaded data once and commit the hashes
+	$(RUN) python -m agenteval freeze-gold
+
 bench: ## Full benchmark matrix; writes results/
-	$(RUN) python -m agenteval
+	$(RUN) python -m agenteval bench --arm A0_baseline --arm A7_oracle
 
 bench-quick: ## Small subset a stranger can run in five minutes
-	$(RUN) python -m agenteval --quick
+	$(RUN) python -m agenteval bench --quick
 
-report: ## Regenerate REPORT.md and charts from committed traces (no model calls)
-	$(RUN) python -m agenteval.report --from-raw results/raw
+report: ## Regenerate REPORT.md from committed traces (no model or engine calls)
+	$(RUN) python -m agenteval report --from-raw results/raw
 
 demo: ## Side-by-side baseline vs grounded run used in the README
 	$(RUN) python -m agentdb.cli demo
