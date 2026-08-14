@@ -204,7 +204,7 @@ def test_a_missing_provider_catalogue_simply_means_no_family_a_arms(tmp_path: Pa
 def test_the_shipped_provider_catalogue_is_keyed_by_arm() -> None:
     configs = load_grounded_configs(Path("eval/providers.yaml"))
 
-    assert sorted(configs) == ["A1_stats", "A2_layout"]
+    assert sorted(configs) == ["A1_stats", "A2_layout", "A3_plan"]
 
 
 async def test_an_arm_that_does_not_exist_yet_is_named() -> None:
@@ -481,3 +481,38 @@ async def test_the_freeze_command_writes_a_lock_beside_the_suite(
     # Assert — one hash per shipped ClickHouse task
     assert path.name == "gold.lock.yaml"
     assert "froze 20 gold result(s)" in lines[0]
+
+
+@dataclass
+class StubAdvisingProvider(StubProvider):
+    """A provider that can also explain a plan — what an A3 arm requires."""
+
+    async def explain_plan(self, *, sql: str, namespace: str) -> str | None:
+        return f"plan for {sql}"
+
+
+def advising_provider_factory(**options: object) -> StubAdvisingProvider:
+    return StubAdvisingProvider(name=str(options.get("name", "agentdb/A3_plan")))
+
+
+async def test_a_plan_review_arm_is_built_when_the_provider_can_explain_one() -> None:
+    config = ProviderConfig(
+        arm="A3_plan",
+        provider="tests.unit.test_cli:advising_provider_factory",
+        plan_review=True,
+    )
+
+    systems = await _build(["A3_plan"], providers={"A3_plan": config})
+
+    assert [system.name for system in systems] == ["A3_plan"]
+
+
+async def test_asking_for_plan_review_from_a_provider_that_cannot_is_refused() -> None:
+    config = ProviderConfig(
+        arm="A3_plan",
+        provider="tests.unit.test_cli:stub_provider_factory",
+        plan_review=True,
+    )
+
+    with pytest.raises(CliError, match="cannot explain a plan"):
+        await _build(["A3_plan"], providers={"A3_plan": config})

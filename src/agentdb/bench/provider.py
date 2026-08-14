@@ -24,7 +24,7 @@ from agentdb.adapters.base import Adapter
 from agentdb.adapters.clickhouse import ClickHouseAdapter
 from agentdb.adapters.clickhouse_client import ClickHouseTarget, Importer, build_client
 from agentdb.config import Config
-from agentdb.core import ContextBuilder, GroundingLevel
+from agentdb.core import ContextBuilder, GroundingLevel, PlanExplainer
 
 VERSION = "1.0"
 """Bumped whenever the assembled payload changes shape, because that changes the number."""
@@ -44,6 +44,9 @@ class GroundedContextProvider:
     level: GroundingLevel
     name: str
     version: str = VERSION
+    explainer: PlanExplainer | None = None
+    """Present when the arm may show the model its plan (``A3`` and above)."""
+
     _cache: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
 
     @property
@@ -59,6 +62,7 @@ class GroundedContextProvider:
                 "sample_fraction": config.default_sample_fraction,
                 "profile_max_rows": config.profile_max_rows,
                 "max_profiled_columns": config.max_profiled_columns,
+                "plan_review": self.explainer is not None,
             }
         )
 
@@ -77,11 +81,24 @@ class GroundedContextProvider:
             self._cache[namespace] = cached
         return cached
 
+    async def explain_plan(self, *, sql: str, namespace: str) -> str | None:
+        """What the engine would do with ``sql``, or ``None`` when nothing is wrong.
+
+        Silence is the useful default. A review that always says something
+        teaches a model to skim it, and the arm then measures politeness rather
+        than plan-awareness — so a plan with no warnings produces no turn at all.
+        """
+        if self.explainer is None:
+            return None
+        summary = await self.explainer.explain(sql, namespace)
+        return summary.render() if summary.warnings else None
+
 
 async def clickhouse_provider(
     *,
     level: str = GroundingLevel.LAYOUT.value,
     name: str | None = None,
+    plan_review: bool = False,
     host: str | None = None,
     port: int | None = None,
     username: str | None = None,
@@ -103,7 +120,12 @@ async def clickhouse_provider(
         database=database if database is not None else env_target.database,
     )
     client = await build_client(target, importer=importer)
-    return build_provider(adapter=ClickHouseAdapter(client=client), level=level, name=name)
+    return build_provider(
+        adapter=ClickHouseAdapter(client=client),
+        level=level,
+        name=name,
+        plan_review=plan_review,
+    )
 
 
 def build_provider(
@@ -111,14 +133,17 @@ def build_provider(
     adapter: Adapter,
     level: str = GroundingLevel.LAYOUT.value,
     name: str | None = None,
+    plan_review: bool = False,
     config: Config | None = None,
 ) -> GroundedContextProvider:
     """Wrap ``adapter`` in a provider at ``level``, rejecting an unknown level by name."""
     resolved = GroundingLevel(level)
+    effective = config or Config()
     return GroundedContextProvider(
-        builder=ContextBuilder(adapter=adapter, config=config or Config()),
+        builder=ContextBuilder(adapter=adapter, config=effective),
         level=resolved,
         name=name or f"agentdb/{resolved.value}",
+        explainer=PlanExplainer(adapter=adapter, config=effective) if plan_review else None,
     )
 
 

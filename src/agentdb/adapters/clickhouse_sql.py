@@ -127,13 +127,18 @@ VERSION: Final = "SELECT version()"
 def explain_statement(sql: str, mode: ExplainMode) -> str:
     """The ``EXPLAIN`` text for ``mode``, verbatim per SPEC §8.1.
 
+    The estimate plan is requested as JSON. The indented text tree is written for
+    humans and its layout is not a contract, while the JSON carries the same
+    index evidence under keys a parser can be tested against — and a misread
+    pruning number is worse than a crash, because it looks like a measurement.
+
     :attr:`~agentdb.adapters.models.ExplainMode.ANALYZE` is absent by design:
     ClickHouse has no ``ANALYZE``, and the adapter refuses the call rather than
     returning estimates dressed up as measurements. The caller checks
     :attr:`~agentdb.adapters.base.Capability.ANALYZE_PLAN` first.
     """
     if mode is ExplainMode.ESTIMATE:
-        return f"EXPLAIN indexes = 1, projections = 1\nSETTINGS {EXPLAIN_SETTINGS}\n{sql}"
+        return f"EXPLAIN indexes = 1, projections = 1, json = 1\nSETTINGS {EXPLAIN_SETTINGS}\n{sql}"
     if mode is ExplainMode.PIPELINE:
         return f"EXPLAIN PIPELINE {sql}"
     return f"EXPLAIN SYNTAX {sql}"

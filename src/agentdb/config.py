@@ -46,6 +46,13 @@ HIGH_CARD_THRESHOLD: Final = 1_000_000
 At a million groups the aggregate state, not the scan, dominates memory.
 """
 
+PRUNING_RATIO_THRESHOLD: Final = 0.9
+"""Granules-read ratio above which a scan counts as unpruned (SPEC §7).
+
+At 0.9 the index removed a tenth of the data; that is noise, not pruning, and the
+query behaves as a full scan.
+"""
+
 FULL_SCAN_ROW_THRESHOLD: Final = 1_000_000
 """Relation size below which an unpruned scan is not worth warning about.
 
@@ -186,6 +193,7 @@ class Config:
 
     low_card_threshold: int = LOW_CARD_THRESHOLD
     high_card_threshold: int = HIGH_CARD_THRESHOLD
+    pruning_ratio_threshold: float = PRUNING_RATIO_THRESHOLD
     full_scan_row_threshold: int = FULL_SCAN_ROW_THRESHOLD
     wide_table_column_threshold: int = WIDE_TABLE_COLUMN_THRESHOLD
     unbounded_row_threshold: int = UNBOUNDED_ROW_THRESHOLD
@@ -210,6 +218,7 @@ class Config:
     _POSITIVE_FIELDS: ClassVar[tuple[str, ...]] = (
         "low_card_threshold",
         "high_card_threshold",
+        "pruning_ratio_threshold",
         "full_scan_row_threshold",
         "wide_table_column_threshold",
         "unbounded_row_threshold",
@@ -254,6 +263,9 @@ class Config:
         return cls(
             low_card_threshold=_env_int(source, "LOW_CARD_THRESHOLD", LOW_CARD_THRESHOLD),
             high_card_threshold=_env_int(source, "HIGH_CARD_THRESHOLD", HIGH_CARD_THRESHOLD),
+            pruning_ratio_threshold=_env_float(
+                source, "PRUNING_RATIO_THRESHOLD", PRUNING_RATIO_THRESHOLD
+            ),
             full_scan_row_threshold=_env_int(
                 source, "FULL_SCAN_ROW_THRESHOLD", FULL_SCAN_ROW_THRESHOLD
             ),

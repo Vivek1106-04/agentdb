@@ -231,9 +231,10 @@ async def test_something_that_is_not_a_provider_is_refused_with_the_shape_it_nee
 def test_the_shipped_catalogue_names_the_family_a_arms(tmp_path: Path) -> None:
     configs = load_provider_configs(Path("eval/providers.yaml"))
 
-    assert [config.arm for config in configs] == ["A1_stats", "A2_layout"]
+    assert [config.arm for config in configs] == ["A1_stats", "A2_layout", "A3_plan"]
     assert all(config.provider.startswith("agentdb.bench.provider:") for config in configs)
     assert configs[0].options["level"] == "stats"
+    assert [config.plan_review for config in configs] == [False, False, True]
 
 
 def test_a_config_needs_an_arm_and_a_provider() -> None:

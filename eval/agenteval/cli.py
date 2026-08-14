@@ -39,6 +39,7 @@ from agenteval.systems.grounded import GroundedSystem
 from agenteval.systems.mcp_generic import McpSystem
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
 from agenteval.systems.oracle import OracleSystem
+from agenteval.systems.plan_aware import PlanAdvisor, PlanAwareSystem
 from agenteval.systems.providers import ProviderConfig, load_provider, load_provider_configs
 from agenteval.systems.raw_schema import ARM_NAME as BASELINE_ARM
 from agenteval.systems.raw_schema import RawSchemaSystem
@@ -215,15 +216,7 @@ async def build_systems(
             built.append(ARMS[arm](executor, client))
             continue
         if arm in providers:
-            config = providers[arm]
-            built.append(
-                GroundedSystem.create(
-                    arm=arm,
-                    provider=await load_provider(config.provider, config.options),
-                    executor=executor,
-                    client=client,
-                )
-            )
+            built.append(await build_grounded(arm, providers[arm], executor, client))
             continue
         session = await connector(servers[arm])
         sessions.append(session)
@@ -233,6 +226,30 @@ async def build_systems(
             )
         )
     return tuple(built)
+
+
+async def build_grounded(
+    arm: str,
+    config: ProviderConfig,
+    executor: QueryExecutor,
+    client: ModelClient,
+) -> SystemUnderTest:
+    """One Family A arm, from the provider its config names.
+
+    A plan-review arm needs a provider that can actually explain a query; asking
+    for one that cannot is a configuration error, not a silently weaker arm.
+    """
+    provider = await load_provider(config.provider, config.options)
+    if not config.plan_review:
+        return GroundedSystem.create(arm=arm, provider=provider, executor=executor, client=client)
+    if not isinstance(provider, PlanAdvisor):
+        raise CliError(
+            f"arm {arm} asks for plan review but {config.provider} cannot explain a plan; "
+            "it needs an async explain_plan(sql, namespace)"
+        )
+    return PlanAwareSystem.create(
+        arm=arm, provider=provider, advisor=provider, executor=executor, client=client
+    )
 
 
 def summarize(cells: Sequence[Cell]) -> tuple[str, ...]:

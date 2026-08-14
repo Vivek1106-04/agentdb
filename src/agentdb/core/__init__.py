@@ -14,10 +14,30 @@ from agentdb.core.context import (
     RelationContext,
 )
 from agentdb.core.context_builder import ContextBuilder
+from agentdb.core.explain import PlanExplainer
+from agentdb.core.plan_ir import (
+    PlanNode,
+    PlanOp,
+    PlanSummary,
+    PlanWarning,
+    Severity,
+    WarningCode,
+)
+from agentdb.core.plan_rules import RelationFacts
+from agentdb.core.query_shape import QueryShape
 
 __all__ = [
     "ContextBuilder",
     "GroundedContext",
     "GroundingLevel",
+    "PlanExplainer",
+    "PlanNode",
+    "PlanOp",
+    "PlanSummary",
+    "PlanWarning",
+    "QueryShape",
     "RelationContext",
+    "RelationFacts",
+    "Severity",
+    "WarningCode",
 ]

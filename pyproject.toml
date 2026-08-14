@@ -20,6 +20,7 @@ classifiers = [
 ]
 dependencies = [
     "pyyaml>=6.0",
+    "sqlglot>=30.17.0",
 ]
 
 [project.optional-dependencies]

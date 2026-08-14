@@ -18,3 +18,11 @@
   options:
     level: layout
     name: agentdb/A2_layout
+
+- arm: A3_plan
+  provider: agentdb.bench.provider:clickhouse_provider
+  plan_review: true
+  options:
+    level: layout
+    name: agentdb/A3_plan
+    plan_review: true

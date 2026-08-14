@@ -8,6 +8,7 @@ of the grounding, and the whole ablation would be uninterpretable.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from time import perf_counter
 
 from agenteval.execution import QueryExecutor
@@ -17,6 +18,17 @@ from agenteval.systems.base import Attempt, EmittedQuery, ModelSpec, TokenUsage
 from agenteval.tasks import Task
 
 NO_SQL_NOTE = "the model replied without a SQL query"
+
+REVIEWED_NOTE = "the draft query was sent back with plan feedback"
+"""Recorded on the attempt, so a trace shows the review happened and when."""
+
+Review = Callable[[str], Awaitable[str | None]]
+"""Given a draft query, feedback to hand back before it runs, or ``None``.
+
+The hook is how arm A3 differs from A2: same prompt, same loop, same retry
+budget, one extra look at the draft. It deliberately does not consume a retry —
+``max_retries`` counts *executed* queries, so EX@k means the same thing in every
+arm and only the token count shows what the review cost."""
 
 _RETRY_TURN = """That query failed.
 
@@ -49,16 +61,24 @@ async def answer_with_model(
     first_turn: str,
     context_bytes: int,
     max_retries: int,
+    review: Review | None = None,
 ) -> Attempt:
-    """Ask, execute, and self-correct up to ``max_retries`` times."""
+    """Ask, optionally review the first draft, execute, and self-correct.
+
+    ``max_retries`` bounds executed queries, not model calls, so an arm that
+    reviews its draft still gets exactly the same number of attempts at the
+    engine as one that does not.
+    """
     started = perf_counter()
     turns: list[Turn] = [Turn(role="user", content=first_turn)]
     queries: list[EmittedQuery] = []
     notes: list[str] = []
     input_tokens = 0
     output_tokens = 0
+    executed = 0
+    reviewed = review is None
 
-    for _ in range(max_retries + 1):
+    while True:
         response = await client.complete(
             system=system_prompt, turns=tuple(turns), model=model, seed=seed
         )
@@ -70,9 +90,19 @@ async def answer_with_model(
             notes.append(NO_SQL_NOTE)
             break
 
+        if not reviewed:
+            reviewed = True
+            feedback = await review(sql) if review is not None else None
+            if feedback is not None:
+                notes.append(REVIEWED_NOTE)
+                turns.append(Turn(role="assistant", content=response.text))
+                turns.append(Turn(role="user", content=feedback))
+                continue
+
         emitted = await executor.run(sql)
         queries.append(emitted)
-        if emitted.succeeded:
+        executed += 1
+        if emitted.succeeded or executed > max_retries:
             break
 
         turns.append(Turn(role="assistant", content=response.text))

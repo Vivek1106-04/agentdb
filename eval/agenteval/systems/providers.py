@@ -45,6 +45,11 @@ class ProviderConfig:
     arm: str
     provider: str
     options: Mapping[str, Any] = field(default_factory=dict)
+    plan_review: bool = False
+    """Whether the arm shows the model its plan before the query runs (``A3``).
+
+    Declared here rather than inferred from the provider: an arm that reviews
+    plans is a different arm, and the report has to be able to say which."""
 
     def __post_init__(self) -> None:
         if not self.arm:
@@ -73,7 +78,7 @@ def load_provider_configs(path: Path) -> tuple[ProviderConfig, ...]:
 
 
 def _parse(payload: Mapping[str, Any], path: Path) -> ProviderConfig:
-    allowed = {"arm", "provider", "options"}
+    allowed = {"arm", "provider", "options", "plan_review"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ProviderError(f"{path}: provider config has unknown field(s): {', '.join(unknown)}")
@@ -81,6 +86,7 @@ def _parse(payload: Mapping[str, Any], path: Path) -> ProviderConfig:
         arm=str(payload.get("arm", "")),
         provider=str(payload.get("provider", "")),
         options=dict(payload.get("options", {})),
+        plan_review=bool(payload.get("plan_review", False)),
     )
 
 

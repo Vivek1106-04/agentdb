@@ -8,11 +8,13 @@ moves the number moves.
 
 from __future__ import annotations
 
+import json
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from agentdb.adapters import ExplainMode, RawPlan
 from agentdb.adapters.base import EngineConnectionError
 from agentdb.adapters.clickhouse import ClickHouseAdapter
 from agentdb.adapters.clickhouse_client import (
@@ -220,3 +222,86 @@ async def test_explicit_connection_arguments_win_over_the_environment(
         "password": "pw",
         "database": "bench",
     }
+
+
+# --------------------------------------------------------------------------
+# plan review (arm A3)
+# --------------------------------------------------------------------------
+
+PLAN_WITH_NO_PRUNING = {
+    "Plan": {
+        "Node Type": "ReadFromMergeTree",
+        "Description": "agentdb.hits",
+        "Indexes": [{"Type": "PrimaryKey", "Initial Granules": 1_000, "Selected Granules": 1_000}],
+    }
+}
+
+
+WELL_PRUNED_PLAN = {
+    "Plan": {
+        "Node Type": "ReadFromMergeTree",
+        "Description": "agentdb.hits",
+        "Indexes": [{"Type": "PrimaryKey", "Initial Granules": 1_000, "Selected Granules": 10}],
+    }
+}
+
+
+def _reviewing_provider(plan: object = PLAN_WITH_NO_PRUNING) -> GroundedContextProvider:
+    adapter = clickhouse_hits_fixture()
+    adapter.plan = RawPlan(
+        engine="clickhouse",
+        mode=ExplainMode.ESTIMATE,
+        sql="",
+        payload=json.dumps([plan]),
+    )
+    return build_provider(adapter=adapter, plan_review=True, name="agentdb/A3_plan")
+
+
+async def test_a_reviewing_provider_reports_what_the_plan_would_do() -> None:
+    provider = _reviewing_provider()
+
+    review = await provider.explain_plan(
+        sql="SELECT count() FROM hits WHERE SearchEngineID = 2", namespace="agentdb"
+    )
+
+    assert review is not None
+    assert "SORT_KEY_UNUSED" in review
+    assert "granules read after pruning" in review
+
+
+async def test_a_plan_with_nothing_wrong_is_reported_as_nothing_at_all() -> None:
+    provider = _reviewing_provider(WELL_PRUNED_PLAN)
+
+    review = await provider.explain_plan(
+        sql="SELECT count() FROM hits WHERE CounterID = 1 AND EventDate > '2013-07-01'",
+        namespace="agentdb",
+    )
+
+    assert review is None
+
+
+async def test_a_provider_without_plan_review_explains_nothing() -> None:
+    provider = build_provider(adapter=clickhouse_hits_fixture())
+
+    assert await provider.explain_plan(sql="SELECT 1", namespace="agentdb") is None
+
+
+def test_plan_review_is_part_of_the_fingerprint() -> None:
+    assert (
+        _reviewing_provider().fingerprint
+        != build_provider(adapter=clickhouse_hits_fixture(), name="agentdb/A3_plan").fingerprint
+    )
+
+
+async def test_the_dotted_path_factory_can_build_a_reviewing_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def get_async_client(**kwargs: Any) -> object:
+        return SimpleNamespace(query=None)
+
+    provider = await clickhouse_provider(
+        plan_review=True,
+        importer=lambda _: cast(ModuleType, SimpleNamespace(get_async_client=get_async_client)),
+    )
+
+    assert provider.explainer is not None
