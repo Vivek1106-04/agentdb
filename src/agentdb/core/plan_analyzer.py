@@ -62,6 +62,7 @@ def summarize(raw: RawPlan) -> PlanSummary:
         engine=raw.engine,
         sql=raw.sql,
         pruning_ratio=ratio,
+        pruning_unit="granule" if considered else None,
         full_scan_relations=tuple(
             node.relation
             for node in scans

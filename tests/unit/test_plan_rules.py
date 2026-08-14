@@ -48,7 +48,13 @@ def _summary(
         if not granules_total or granules_selected is None
         else granules_selected / granules_total
     )
-    return PlanSummary(root=scan, engine="clickhouse", sql=sql, pruning_ratio=ratio)
+    return PlanSummary(
+        root=scan,
+        engine="clickhouse",
+        sql=sql,
+        pruning_ratio=ratio,
+        pruning_unit="granule" if ratio is not None else None,
+    )
 
 
 def _facts(layout: PhysicalLayout = LAYOUT, **kwargs: object) -> dict[str, RelationFacts]:

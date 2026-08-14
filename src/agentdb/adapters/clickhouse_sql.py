@@ -132,10 +132,10 @@ def explain_statement(sql: str, mode: ExplainMode) -> str:
     index evidence under keys a parser can be tested against — and a misread
     pruning number is worse than a crash, because it looks like a measurement.
 
-    :attr:`~agentdb.adapters.models.ExplainMode.ANALYZE` is absent by design:
-    ClickHouse has no ``ANALYZE``, and the adapter refuses the call rather than
-    returning estimates dressed up as measurements. The caller checks
-    :attr:`~agentdb.adapters.base.Capability.ANALYZE_PLAN` first.
+    :attr:`~agentdb.adapters.models.ExplainMode.COST` is absent by design:
+    ClickHouse reports no cost annotations, and the adapter refuses the call
+    rather than returning estimates dressed up as measurements. The caller checks
+    :attr:`~agentdb.adapters.base.Capability.COST_ANNOTATED_PLAN` first.
     """
     if mode is ExplainMode.ESTIMATE:
         return f"EXPLAIN indexes = 1, projections = 1, json = 1\nSETTINGS {EXPLAIN_SETTINGS}\n{sql}"

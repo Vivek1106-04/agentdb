@@ -30,7 +30,7 @@ VERSION = "1.0"
 DEFAULT_MAX_RETRIES = 2
 """Self-corrections allowed after the first query — the ``k`` in EX@k (SPEC §11.1)."""
 
-_ENGINE_LABEL: Mapping[Engine, str] = {"clickhouse": "ClickHouse", "postgres": "PostgreSQL"}
+_ENGINE_LABEL: Mapping[Engine, str] = {"clickhouse": "ClickHouse", "databricks": "Databricks SQL"}
 
 _SYSTEM_PROMPT = """You are a data analyst writing SQL for a {label} database.
 

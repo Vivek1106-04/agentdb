@@ -38,7 +38,7 @@ def _system(
 
 def test_the_system_prompt_names_the_engine() -> None:
     assert "ClickHouse" in build_system_prompt("clickhouse")
-    assert "PostgreSQL" in build_system_prompt("postgres")
+    assert "Databricks SQL" in build_system_prompt("databricks")
 
 
 def test_the_question_turn_carries_only_ddl_and_the_question() -> None:

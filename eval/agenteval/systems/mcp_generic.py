@@ -48,7 +48,7 @@ NO_TOOLS_NOTE = "the server advertised no usable tools"
 NO_SQL_NOTE = "the system finished without emitting a SQL query"
 TURN_LIMIT_NOTE = "the system hit the tool-call limit without answering"
 
-_ENGINE_LABEL: Mapping[Engine, str] = {"clickhouse": "ClickHouse", "postgres": "PostgreSQL"}
+_ENGINE_LABEL: Mapping[Engine, str] = {"clickhouse": "ClickHouse", "databricks": "Databricks SQL"}
 
 _SYSTEM_PROMPT = """You are a data analyst answering questions about a {label} database.
 

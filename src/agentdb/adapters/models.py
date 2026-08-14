@@ -20,8 +20,13 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Literal
 
-Engine = Literal["postgres", "clickhouse"]
-"""The two engines in scope. SPEC §17: two engines, hard stop."""
+Engine = Literal["clickhouse", "databricks"]
+"""The two engines in scope. SPEC §17: two engines, hard stop.
+
+Spec 1.2 replaced Postgres with Databricks as the second *measured* engine.
+Postgres survives in the stack only as the pgvector exemplar store of SPEC §10,
+which is infrastructure and never a system under test.
+"""
 
 SampleMethod = Literal["full", "sample", "system_table", "unavailable"]
 """How a profile figure was obtained. Never present an estimate as exact."""
@@ -33,16 +38,23 @@ RelationKind = Literal["table", "view", "materialized_view", "foreign_table"]
 class ExplainMode(StrEnum):
     """Which plan an adapter should produce.
 
-    ClickHouse ``EXPLAIN`` is estimate-only — there is no ``ANALYZE`` — so
-    :attr:`ANALYZE` is available only where
-    :attr:`~agentdb.adapters.base.Capability.ANALYZE_PLAN` is declared.
+    Both engines are estimate-only: ClickHouse has no ``ANALYZE``, and Databricks
+    ``EXPLAIN`` does not execute either (SPEC §8.2). Neither can populate
+    :attr:`PlanNode.actual_rows`, so there is no mode that claims to — measured
+    rows come from the workload log after execution, and are labelled as such.
     """
 
     ESTIMATE = "estimate"
     """Plan without executing the query."""
 
-    ANALYZE = "analyze"
-    """Plan with measured row counts; executes the query (Postgres, rolled back)."""
+    COST = "cost"
+    """Plan annotated with cost and statistics (Databricks ``EXPLAIN COST``).
+
+    Available only where
+    :attr:`~agentdb.adapters.base.Capability.COST_ANNOTATED_PLAN` is declared, and
+    meaningless without ``ANALYZE`` having been run for the columns involved
+    (SPEC §8.2 footgun 1).
+    """
 
     PIPELINE = "pipeline"
     """Physical execution pipeline (ClickHouse ``EXPLAIN PIPELINE``)."""
@@ -69,13 +81,30 @@ class ErrorClass(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class RelationRef:
-    """A fully qualified table or view."""
+    """A fully qualified table or view.
+
+    ``catalog`` exists for Unity Catalog's three-level ``catalog.schema.table``
+    namespace (SPEC §8.2 footgun 3). It is ``None`` on ClickHouse, whose names
+    have two parts. A Databricks reference that reaches the engine with fewer
+    than three parts resolves against session ``USE`` state the stateless core
+    does not have, which is a correctness hazard, not a style one.
+    """
 
     namespace: str
     name: str
+    catalog: str | None = None
 
     def __str__(self) -> str:
-        return f"{self.namespace}.{self.name}"
+        if self.catalog is None:
+            return f"{self.namespace}.{self.name}"
+        return f"{self.catalog}.{self.namespace}.{self.name}"
+
+    @property
+    def parts(self) -> tuple[str, ...]:
+        """The name components, in qualification order."""
+        if self.catalog is None:
+            return (self.namespace, self.name)
+        return (self.catalog, self.namespace, self.name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,27 +177,14 @@ class Projection:
 
 
 @dataclass(frozen=True, slots=True)
-class IndexDef:
-    """A Postgres index."""
-
-    name: str
-    definition: str
-    columns: tuple[str, ...]
-    is_unique: bool
-    is_primary: bool
-    method: str
-    """Access method, e.g. ``btree``, ``hash``, ``gin``, ``hnsw``."""
-
-    size_bytes: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class PhysicalLayout:
     """The physical design an agent cannot see in a schema dump (SPEC §6).
 
-    This is the ClickHouse-differentiating payload: whether a filter prunes
-    granules depends entirely on :attr:`order_by`, and no ``CREATE TABLE``
-    listing of column names conveys that.
+    This is the differentiating payload on both engines, and the mechanism is the
+    same story twice: on ClickHouse whether a filter prunes *granules* depends on
+    :attr:`order_by`, and on Databricks whether it prunes *files* depends on
+    :attr:`clustering_columns` and on which columns Delta collects statistics for.
+    No ``CREATE TABLE`` listing of column names conveys either.
     """
 
     engine: Engine
@@ -185,14 +201,48 @@ class PhysicalLayout:
     projections: tuple[Projection, ...] = ()
     ttl: str | None = None
 
-    # Postgres
-    indexes: tuple[IndexDef, ...] = ()
-    partitioning: str | None = None
+    # Databricks / Delta
+    table_format: str | None = None
+    """``delta``, ``parquet``, ``view``… from ``DESCRIBE DETAIL.format``."""
 
-    # both
+    clustering_columns: tuple[str, ...] | None = None
+    """Liquid clustering key (``CLUSTER BY``) — the analogue of ``order_by``."""
+
+    zorder_columns: tuple[str, ...] | None = None
+    """Legacy Z-ORDER, mined from ``DESCRIBE HISTORY``; not a table property."""
+
+    is_managed: bool | None = None
+    """Managed Unity Catalog table, so predictive optimization may apply."""
+
+    deletion_vectors_enabled: bool | None = None
+    num_files: int | None = None
+    avg_file_bytes: float | None = None
+    stats_indexed_columns: int | None = None
+    """``delta.dataSkippingNumIndexedCols``. ``None`` means the table did not set
+    it, and the Delta default applies (see :data:`agentdb.config.DELTA_DEFAULT_STATS_COLUMNS`)."""
+
+    stats_columns: tuple[str, ...] | None = None
+    """``delta.dataSkippingStatsColumns``. When set, it — not the ordinal — decides."""
+
+    # both  (partition_by above is shared: MergeTree PARTITION BY / Delta PARTITIONED BY)
     approx_rows: int | None = None
     on_disk_bytes: int | None = None
     compression_ratio: float | None = None
+
+    def has_file_statistics(self, column: str, ordinal: int, *, default_indexed: int) -> bool:
+        """Whether Delta collects per-file statistics for ``column`` (SPEC §8.2).
+
+        ``ordinal`` is the 1-based position from ``information_schema.columns``.
+        Delta indexes only the first ``delta.dataSkippingNumIndexedCols`` columns
+        in schema order, so a filter on column 40 of a wide table cannot skip a
+        single file — a silent 100x that no schema dump reveals. An explicit
+        ``delta.dataSkippingStatsColumns`` overrides the ordinal rule entirely.
+        """
+        if self.stats_columns is not None:
+            return column in self.stats_columns
+        if self.stats_indexed_columns is not None:
+            return ordinal <= self.stats_indexed_columns
+        return ordinal <= default_indexed
 
     @property
     def is_sampleable(self) -> bool:

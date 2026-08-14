@@ -3,7 +3,9 @@
 **Agentic analytics shipped in 2026. Nobody published an accuracy number.**
 
 This repository is building one — NL→SQL execution accuracy for ClickHouse and
-Postgres, across several agent stacks, fully reproducible on your own hardware.
+Databricks, across several agent stacks, fully reproducible on your own hardware.
+No published measurement puts agentic NL→SQL on a columnar OLAP engine and on a
+lakehouse side by side, on identical questions, under one blind grader.
 
 Three artifacts, in order of importance:
 
@@ -26,7 +28,7 @@ first results.
 ```bash
 make install   # uv sync
 make check     # lint + mypy --strict + import contracts + tests at 100% coverage
-make up        # Postgres (pgvector, hypopg, pg_stat_statements) + ClickHouse
+make up        # ClickHouse + Postgres/pgvector (the exemplar store, not a system under test)
 ```
 
 ## License

@@ -64,10 +64,10 @@ def test_an_empty_dimension_is_refused(kwargs: dict[str, tuple[object, ...]], me
 
 
 async def test_a_suite_with_no_tasks_for_the_engine_is_refused() -> None:
-    postgres_only = _suite(replace(sample_task(), engines=("postgres",)))
+    databricks_only = _suite(replace(sample_task(), engines=("databricks",)))
 
     with pytest.raises(RunConfigError, match="no tasks targeting clickhouse"):
-        await run(_spec(systems=(StubSystem(),), suite=postgres_only), FakeExecutor())
+        await run(_spec(systems=(StubSystem(),), suite=databricks_only), FakeExecutor())
 
 
 async def test_the_matrix_covers_every_system_model_and_seed() -> None:

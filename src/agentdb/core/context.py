@@ -132,14 +132,49 @@ def _render_layout(layout: PhysicalLayout) -> str:
         )
     for projection in layout.projections:
         lines.append(f"- projection {projection.name}: {projection.query}")
-    for definition in layout.indexes:
-        columns = ", ".join(definition.columns)
-        lines.append(f"- index {definition.name}: {definition.method} on {columns}")
+    lines.extend(_render_delta_layout(layout))
     if layout.approx_rows is not None:
         lines.append(f"- approx rows: {layout.approx_rows:,}")
     if layout.compression_ratio is not None:
         lines.append(f"- compression ratio: {layout.compression_ratio:.1f}x")
     return "\n".join(lines)
+
+
+def _render_delta_layout(layout: PhysicalLayout) -> list[str]:
+    """The Delta half of the layout payload (SPEC §8.2).
+
+    The statistics line is the one that earns its tokens: Delta collects per-file
+    min/max only for a bounded set of columns, and a filter outside that set skips
+    no files no matter how selective it is. Nothing in a ``CREATE TABLE`` says so.
+    """
+    lines: list[str] = []
+    if layout.table_format is not None:
+        lines.append(f"- table format: {layout.table_format}")
+    if layout.clustering_columns:
+        lines.append(
+            f"- clustering key (CLUSTER BY): {', '.join(layout.clustering_columns)}"
+            " — filters prune files through this key"
+        )
+    if layout.zorder_columns:
+        lines.append(f"- legacy Z-ORDER columns: {', '.join(layout.zorder_columns)}")
+    if layout.stats_columns:
+        lines.append(
+            "- data-skipping statistics collected for: "
+            f"{', '.join(layout.stats_columns)} — filters on other columns skip no files"
+        )
+    elif layout.stats_indexed_columns is not None:
+        lines.append(
+            f"- data-skipping statistics collected for the first {layout.stats_indexed_columns}"
+            " columns in schema order — filters on later columns skip no files"
+        )
+    if layout.num_files is not None:
+        detail = f"- files: {layout.num_files:,}"
+        if layout.avg_file_bytes is not None:
+            detail += f", averaging {layout.avg_file_bytes / 1024 / 1024:.1f} MiB"
+        lines.append(detail)
+    if layout.deletion_vectors_enabled:
+        lines.append("- deletion vectors are enabled; deleted rows are masked, not rewritten")
+    return lines
 
 
 def _render_profiles(relation: RelationContext) -> str:

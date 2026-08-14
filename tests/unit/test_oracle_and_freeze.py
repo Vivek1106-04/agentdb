@@ -124,10 +124,10 @@ async def test_freezing_hashes_every_gold_result() -> None:
 
 
 async def test_freezing_a_suite_the_engine_cannot_serve_is_refused() -> None:
-    postgres_only = TaskSuite(name="s", tasks=(replace(sample_task(), engines=("postgres",)),))
+    databricks_only = TaskSuite(name="s", tasks=(replace(sample_task(), engines=("databricks",)),))
 
     with pytest.raises(GoldError, match="no tasks targeting clickhouse"):
-        await compute_gold_hashes(FakeExecutor(), postgres_only)
+        await compute_gold_hashes(FakeExecutor(), databricks_only)
 
 
 async def test_freezing_re_checks_existing_hashes_rather_than_papering_over_drift() -> None:

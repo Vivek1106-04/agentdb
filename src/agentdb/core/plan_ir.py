@@ -16,6 +16,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
+
+PruningUnit = Literal["granule", "file"]
+"""What a pruning ratio counts. ClickHouse prunes granules, Databricks prunes
+files; a ratio is meaningless without the unit beside it (SPEC §7)."""
 
 
 class PlanOp(StrEnum):
@@ -47,9 +52,26 @@ class WarningCode(StrEnum):
     """The actionable findings. This list is the product (SPEC §7)."""
 
     FULL_SCAN = "FULL_SCAN"
+
+    # ClickHouse
     SORT_KEY_UNUSED = "SORT_KEY_UNUSED"
     SORT_KEY_PREFIX_SKIPPED = "SORT_KEY_PREFIX_SKIPPED"
     PROJECTION_AVAILABLE_UNUSED = "PROJECTION_AVAILABLE_UNUSED"
+
+    # Databricks
+    CLUSTERING_KEY_UNUSED = "CLUSTERING_KEY_UNUSED"
+    """The analogue of :attr:`SORT_KEY_UNUSED`, and the headline Databricks warning."""
+
+    STATS_NOT_COLLECTED = "STATS_NOT_COLLECTED"
+    """The filtered column lies outside Delta's indexed column set, so data
+    skipping cannot fire at all. A silent 100x on a wide table."""
+
+    SMALL_FILES = "SMALL_FILES"
+    PHOTON_FALLBACK = "PHOTON_FALLBACK"
+    UNQUALIFIED_RELATION = "UNQUALIFIED_RELATION"
+    """Fewer than three name parts under Unity Catalog: a correctness hazard."""
+
+    # both
     HIGH_CARD_GROUP_BY = "HIGH_CARD_GROUP_BY"
     JOIN_ORDER_SUSPECT = "JOIN_ORDER_SUSPECT"
     MISSING_PARTITION_PREDICATE = "MISSING_PARTITION_PREDICATE"
@@ -108,6 +130,7 @@ class PlanNode:
     filters: tuple[str, ...] = ()
 
     # pruning evidence — the whole point of the IR
+    # ClickHouse
     granules_total: int | None = None
     granules_selected: int | None = None
     parts_total: int | None = None
@@ -116,6 +139,29 @@ class PlanNode:
     """Names of the primary and skip indexes that actually fired."""
 
     projection_used: str | None = None
+
+    # Databricks / Delta
+    files_total: int | None = None
+    files_selected: int | None = None
+    partitions_total: int | None = None
+    partitions_selected: int | None = None
+    partition_filters: tuple[str, ...] = ()
+    """Predicates the scan pushed to partition pruning."""
+
+    pushed_filters: tuple[str, ...] = ()
+    """Predicates answerable from per-file statistics. These are the ones that skip files."""
+
+    data_filters: tuple[str, ...] = ()
+    """Predicates evaluated row by row. A predicate here and not in
+    :attr:`pushed_filters` cannot skip a single file."""
+
+    photon: bool | None = None
+    """Whether this node ran on Photon. ``None`` where the engine cannot report it —
+    Photon is inferred from the node name, never claimed to have been stated."""
+
+    join_strategy: str | None = None
+    """``broadcast_hash`` | ``sort_merge`` | ``shuffle_hash`` | …"""
+
     children: tuple[PlanNode, ...] = ()
 
     def walk(self) -> tuple[PlanNode, ...]:
@@ -123,17 +169,29 @@ class PlanNode:
         return (self, *tuple(node for child in self.children for node in child.walk()))
 
     @property
-    def pruning_ratio(self) -> float | None:
-        """Granules kept over granules considered, or ``None`` when unmeasured.
+    def pruning_unit(self) -> PruningUnit | None:
+        """What this node's pruning is counted in, or ``None`` when it reported none."""
+        if self.granules_total:
+            return "granule"
+        if self.files_total:
+            return "file"
+        return None
 
-        Low is good: 0.01 means the index threw away 99% of the data before
-        reading it. A ratio of 1.0 means the sort key did nothing.
+    @property
+    def pruning_ratio(self) -> float | None:
+        """Units kept over units considered, or ``None`` when unmeasured.
+
+        Low is good: 0.01 means the engine threw away 99% of the data before
+        reading it. A ratio of 1.0 means the sort key — or the clustering key and
+        file statistics — did nothing. Granules on ClickHouse, files on
+        Databricks: one number, two mechanisms, and
+        :attr:`pruning_unit` says which so the two are never quietly compared.
         """
-        if not self.granules_total:
-            return None
-        if self.granules_selected is None:
-            return None
-        return self.granules_selected / self.granules_total
+        if self.granules_total and self.granules_selected is not None:
+            return self.granules_selected / self.granules_total
+        if self.files_total and self.files_selected is not None:
+            return self.files_selected / self.files_total
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,10 +202,17 @@ class PlanSummary:
     engine: str
     sql: str
     pruning_ratio: float | None = None
-    """Aggregated over every scan: total selected granules over total considered."""
+    """Aggregated over every scan: total units selected over total considered."""
+
+    pruning_unit: PruningUnit | None = None
+    """Always reported alongside :attr:`pruning_ratio`, so a reader never compares
+    a granule ratio to a file ratio without noticing (SPEC §7)."""
 
     full_scan_relations: tuple[str, ...] = ()
     estimated_bytes_read: int | None = None
+    photon_coverage: float | None = None
+    """Databricks: fraction of plan nodes that ran on Photon. ``None`` elsewhere."""
+
     warnings: tuple[PlanWarning, ...] = ()
 
     @property
@@ -162,8 +227,10 @@ class PlanSummary:
             engine=self.engine,
             sql=self.sql,
             pruning_ratio=self.pruning_ratio,
+            pruning_unit=self.pruning_unit,
             full_scan_relations=self.full_scan_relations,
             estimated_bytes_read=self.estimated_bytes_read,
+            photon_coverage=self.photon_coverage,
             warnings=warnings,
         )
 
@@ -176,11 +243,14 @@ class PlanSummary:
         lines = [f"Plan summary ({self.engine}):"]
         if self.pruning_ratio is not None:
             kept = f"{self.pruning_ratio:.1%}"
-            lines.append(f"- granules read after pruning: {kept} of those considered")
+            unit = self.pruning_unit or "unit"
+            lines.append(f"- {unit}s read after pruning: {kept} of those considered")
         for relation in self.full_scan_relations:
             lines.append(f"- full scan: {relation}")
         if self.estimated_bytes_read is not None:
             lines.append(f"- estimated bytes read: {self.estimated_bytes_read:,}")
+        if self.photon_coverage is not None:
+            lines.append(f"- plan nodes on Photon: {self.photon_coverage:.0%}")
         for warning in self.warnings:
             lines.append(_render_warning(warning))
         if len(lines) == 1:

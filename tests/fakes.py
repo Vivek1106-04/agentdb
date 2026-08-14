@@ -33,21 +33,33 @@ from agentdb.adapters import (
 CLICKHOUSE_CAPABILITIES = frozenset(
     {
         Capability.ESTIMATE_ONLY_PLAN,
+        Capability.SORT_KEY,
         Capability.SKIP_INDEX,
         Capability.PROJECTION,
-        Capability.SORT_KEY,
+        Capability.GRANULE_PRUNING,
+        Capability.PARTITION_PRUNING,
         Capability.WORKLOAD_LOG,
         Capability.COLUMN_STATS,
         Capability.SAMPLING,
     }
 )
 
-POSTGRES_CAPABILITIES = frozenset(
+DATABRICKS_CAPABILITIES = frozenset(
     {
-        Capability.HYPOTHETICAL_INDEX,
-        Capability.ANALYZE_PLAN,
+        Capability.ESTIMATE_ONLY_PLAN,
+        Capability.COST_ANNOTATED_PLAN,
+        Capability.POST_HOC_PLAN_METRICS,
+        Capability.CLUSTERING_KEY,
+        Capability.ZORDER,
+        Capability.FILE_PRUNING,
+        Capability.DATA_SKIPPING_STATS,
+        Capability.DELETION_VECTORS,
+        Capability.VECTORIZED_ENGINE,
+        Capability.THREE_LEVEL_NAMESPACE,
+        Capability.PARTITION_PRUNING,
         Capability.WORKLOAD_LOG,
         Capability.COLUMN_STATS,
+        Capability.SAMPLING,
     }
 )
 

@@ -45,13 +45,13 @@ def test_parses_the_full_task_shape_from_the_spec() -> None:
     assert task.notes is not None
     assert task.source_path == "suites/clickbench_nl/017.yaml"
     assert task.targets("clickhouse") is True
-    assert task.targets("postgres") is False
+    assert task.targets("databricks") is False
 
 
 def test_a_scalar_engine_is_accepted_and_deduplicated() -> None:
-    assert parse_task({**VALID, "engine": "postgres"}).engines == ("postgres",)
-    assert parse_task({**VALID, "engine": ["postgres", "postgres", "clickhouse"]}).engines == (
-        "postgres",
+    assert parse_task({**VALID, "engine": "databricks"}).engines == ("databricks",)
+    assert parse_task({**VALID, "engine": ["databricks", "databricks", "clickhouse"]}).engines == (
+        "databricks",
         "clickhouse",
     )
 
@@ -200,7 +200,7 @@ def _suite() -> TaskSuite:
             Task(
                 id="t2",
                 suite="tpch_nl",
-                engines=("postgres", "clickhouse"),
+                engines=("databricks", "clickhouse"),
                 question="q",
                 gold_sql="SELECT 1",
             ),
@@ -209,7 +209,7 @@ def _suite() -> TaskSuite:
 
 
 def test_suite_filters_by_engine() -> None:
-    assert [task.id for task in _suite().for_engine("postgres")] == ["t2"]
+    assert [task.id for task in _suite().for_engine("databricks")] == ["t2"]
     assert len(_suite().for_engine("clickhouse")) == 2
 
 
@@ -223,7 +223,7 @@ def test_suite_subset_must_be_positive() -> None:
 
 
 def test_suite_lookup_by_id() -> None:
-    assert _suite().by_id("t2").engines == ("postgres", "clickhouse")
+    assert _suite().by_id("t2").engines == ("databricks", "clickhouse")
 
 
 def test_suite_lookup_reports_a_missing_id() -> None:

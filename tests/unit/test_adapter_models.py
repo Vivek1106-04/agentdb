@@ -12,7 +12,6 @@ from agentdb.adapters import (
     ColumnProfile,
     DialectRules,
     ExplainMode,
-    IndexDef,
     Limits,
     PhysicalLayout,
     Projection,
@@ -122,26 +121,78 @@ def test_layout_reports_whether_sample_is_available() -> None:
     assert _layout(sampling_key="cityHash64(UserID)").is_sampleable is True
 
 
-def test_layout_holds_clickhouse_and_postgres_physical_design() -> None:
+def test_layout_holds_clickhouse_physical_design() -> None:
     layout = _layout(
         skip_indexes=(
             SkipIndex(name="idx_url", index_type="bloom_filter", expression="URL", granularity=4),
         ),
         projections=(Projection(name="proj_by_date", query="SELECT EventDate, count()"),),
-        indexes=(
-            IndexDef(
-                name="hits_pkey",
-                definition="CREATE UNIQUE INDEX ...",
-                columns=("id",),
-                is_unique=True,
-                is_primary=True,
-                method="btree",
-            ),
-        ),
     )
     assert layout.skip_indexes[0].index_type == "bloom_filter"
     assert layout.projections[0].name == "proj_by_date"
-    assert layout.indexes[0].is_primary is True
+
+
+def test_layout_holds_delta_physical_design() -> None:
+    layout = PhysicalLayout(
+        engine="databricks",
+        ref=RelationRef(catalog="samples", namespace="tpch", name="lineitem"),
+        create_statement="CREATE TABLE samples.tpch.lineitem (...) USING delta",
+        table_format="delta",
+        clustering_columns=("l_shipdate",),
+        zorder_columns=("l_partkey",),
+        is_managed=True,
+        deletion_vectors_enabled=True,
+        num_files=4_096,
+        avg_file_bytes=8_388_608.0,
+    )
+    assert layout.clustering_columns == ("l_shipdate",)
+    assert layout.leading_sort_column is None
+    assert layout.is_sampleable is False
+
+
+def test_delta_statistics_stop_at_the_indexed_column_count() -> None:
+    # Arrange — the table says nothing, so the Delta default applies
+    layout = PhysicalLayout(
+        engine="databricks",
+        ref=RelationRef(catalog="main", namespace="tpch", name="wide"),
+        create_statement="CREATE TABLE main.tpch.wide (...) USING delta",
+    )
+
+    # Act / Assert — column 40 of a wide table cannot skip a single file
+    assert layout.has_file_statistics("c1", 1, default_indexed=32) is True
+    assert layout.has_file_statistics("c40", 40, default_indexed=32) is False
+
+
+def test_delta_statistics_honour_the_table_property_over_the_default() -> None:
+    layout = PhysicalLayout(
+        engine="databricks",
+        ref=RelationRef(catalog="main", namespace="tpch", name="wide"),
+        create_statement="CREATE TABLE main.tpch.wide (...) USING delta",
+        stats_indexed_columns=64,
+    )
+    assert layout.has_file_statistics("c40", 40, default_indexed=32) is True
+
+
+def test_an_explicit_statistics_column_list_overrides_the_ordinal_rule() -> None:
+    layout = PhysicalLayout(
+        engine="databricks",
+        ref=RelationRef(catalog="main", namespace="tpch", name="wide"),
+        create_statement="CREATE TABLE main.tpch.wide (...) USING delta",
+        stats_indexed_columns=32,
+        stats_columns=("c40",),
+    )
+    assert layout.has_file_statistics("c40", 40, default_indexed=32) is True
+    assert layout.has_file_statistics("c1", 1, default_indexed=32) is False
+
+
+def test_a_relation_ref_carries_the_three_level_databricks_namespace() -> None:
+    two_part = RelationRef(namespace="agentdb", name="hits")
+    three_part = RelationRef(catalog="samples", namespace="tpch", name="lineitem")
+
+    assert str(two_part) == "agentdb.hits"
+    assert two_part.parts == ("agentdb", "hits")
+    assert str(three_part) == "samples.tpch.lineitem"
+    assert three_part.parts == ("samples", "tpch", "lineitem")
 
 
 def test_profile_flags_low_cardinality_against_a_configured_threshold() -> None:
@@ -250,10 +301,10 @@ def test_workload_entry_holds_a_concrete_instance_for_the_advisor() -> None:
 
 def test_dialect_quotes_identifiers_per_engine() -> None:
     clickhouse = DialectRules(engine="clickhouse", version="25.9", identifier_quote="`")
-    postgres = DialectRules(engine="postgres", version="17.2", identifier_quote='"')
+    databricks = DialectRules(engine="databricks", version="16.4", identifier_quote='"')
 
     assert clickhouse.quote_identifier("Order") == "`Order`"
-    assert postgres.quote_identifier("Order") == '"Order"'
+    assert databricks.quote_identifier("Order") == '"Order"'
 
 
 def test_dialect_escapes_embedded_quotes() -> None:
@@ -275,8 +326,8 @@ def test_dialect_escapes_embedded_quotes() -> None:
 )
 def test_dialect_knows_which_identifiers_must_be_quoted(identifier: str, needs: bool) -> None:
     rules = DialectRules(
-        engine="postgres",
-        version="17.2",
+        engine="databricks",
+        version="16.4",
         identifier_quote='"',
         reserved_words=frozenset({"SELECT"}),
     )

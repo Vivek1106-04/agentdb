@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 import yaml
 
-Engine = Literal["postgres", "clickhouse"]
+Engine = Literal["clickhouse", "databricks"]
 """Engines a task can target. Declared here, not imported: agenteval depends on
 no part of agentdb (SPEC §4.1.6)."""
 
@@ -34,7 +34,7 @@ GOLD_LOCK_NAME = "gold.lock.yaml"
 task files. A reviewer auditing gold drift then reads a single diff, and
 authoring a task never touches the same lines as verifying one."""
 
-_ENGINES: frozenset[str] = frozenset({"postgres", "clickhouse"})
+_ENGINES: frozenset[str] = frozenset({"clickhouse", "databricks"})
 _DIFFICULTIES: frozenset[str] = frozenset({"easy", "medium", "hard"})
 
 

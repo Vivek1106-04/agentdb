@@ -111,9 +111,11 @@ class ClickHouseAdapter(BaseAdapter):
         default_factory=lambda: frozenset(
             {
                 Capability.ESTIMATE_ONLY_PLAN,
+                Capability.SORT_KEY,
                 Capability.SKIP_INDEX,
                 Capability.PROJECTION,
-                Capability.SORT_KEY,
+                Capability.GRANULE_PRUNING,
+                Capability.PARTITION_PRUNING,
                 Capability.WORKLOAD_LOG,
                 Capability.COLUMN_STATS,
                 Capability.SAMPLING,
@@ -278,12 +280,13 @@ class ClickHouseAdapter(BaseAdapter):
     async def explain(self, sql: str, mode: ExplainMode) -> RawPlan:
         """The engine's plan, verbatim, with the statement that produced it.
 
-        ``ANALYZE`` is refused rather than approximated: ClickHouse cannot measure
-        a plan without running the query, and an estimate returned under the name
-        of a measurement is the one thing the plan layer must never do.
+        A cost-annotated plan is refused rather than approximated: ClickHouse's
+        ``EXPLAIN`` carries no cost model output of the kind Databricks
+        ``EXPLAIN COST`` returns, and an estimate served under the name of a
+        measurement is the one thing the plan layer must never do.
         """
-        if mode is ExplainMode.ANALYZE:
-            self.require(Capability.ANALYZE_PLAN)
+        if mode is ExplainMode.COST:
+            self.require(Capability.COST_ANNOTATED_PLAN)
         statement = ch.explain_statement(sql, mode)
         result = await self._query(statement, {})
         return RawPlan(

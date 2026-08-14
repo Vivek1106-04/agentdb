@@ -1,7 +1,7 @@
 """Engine adapters and the contract they satisfy (SPEC §6).
 
-Core imports from this package only — never from ``agentdb.adapters.postgres``
-or ``agentdb.adapters.clickhouse`` directly. That rule is an import-linter
+Core imports from this package only — never from ``agentdb.adapters.clickhouse``
+or ``agentdb.adapters.databricks`` directly. That rule is an import-linter
 contract, not a convention.
 """
 
@@ -28,7 +28,6 @@ from agentdb.adapters.models import (
     Engine,
     ErrorClass,
     ExplainMode,
-    IndexDef,
     Limits,
     PhysicalLayout,
     Projection,
@@ -56,7 +55,6 @@ __all__ = [
     "EngineConnectionError",
     "ErrorClass",
     "ExplainMode",
-    "IndexDef",
     "LimitExceededError",
     "Limits",
     "PhysicalLayout",

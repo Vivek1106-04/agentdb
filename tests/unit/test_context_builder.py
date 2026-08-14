@@ -15,7 +15,6 @@ from agentdb.adapters import (
     Capability,
     ColumnDef,
     ColumnProfile,
-    IndexDef,
     PhysicalLayout,
     Projection,
     RelationDetail,
@@ -264,16 +263,6 @@ def test_layout_rendering_covers_every_kind_of_physical_object() -> None:
             SkipIndex(name="idx_url", index_type="bloom_filter", expression="URL", granularity=4),
         ),
         projections=(Projection(name="by_user", query="SELECT UserID, count()"),),
-        indexes=(
-            IndexDef(
-                name="hits_pkey",
-                definition="CREATE INDEX ...",
-                columns=("CounterID",),
-                is_unique=True,
-                is_primary=True,
-                method="btree",
-            ),
-        ),
         approx_rows=1_000,
         compression_ratio=4.2,
     )
@@ -294,5 +283,96 @@ def test_layout_rendering_covers_every_kind_of_physical_object() -> None:
     assert "- sampling key: intHash32(UserID)" in rendered
     assert "- skip index idx_url: bloom_filter on URL (granularity 4)" in rendered
     assert "- projection by_user: SELECT UserID, count()" in rendered
-    assert "- index hits_pkey: btree on CounterID" in rendered
     assert "- compression ratio: 4.2x" in rendered
+
+
+def test_layout_renders_the_delta_facts_a_schema_dump_hides() -> None:
+    # Arrange — a Databricks table whose statistics stop before the filtered column
+    ref = RelationRef(catalog="samples", namespace="tpch", name="lineitem")
+    layout = PhysicalLayout(
+        engine="databricks",
+        ref=ref,
+        create_statement="CREATE TABLE samples.tpch.lineitem (...) USING delta",
+        table_format="delta",
+        clustering_columns=("l_shipdate", "l_orderkey"),
+        zorder_columns=("l_partkey",),
+        stats_indexed_columns=32,
+        num_files=4_096,
+        avg_file_bytes=8 * 1024 * 1024,
+        deletion_vectors_enabled=True,
+    )
+    context = GroundedContext(
+        engine="databricks",
+        namespace="tpch",
+        level=GroundingLevel.LAYOUT,
+        relations=(
+            RelationContext(
+                detail=RelationDetail(ref=ref, columns=(), create_statement="CREATE TABLE x"),
+                layout=layout,
+            ),
+        ),
+    )
+
+    # Act
+    rendered = context.render()
+
+    # Assert
+    assert "- table format: delta" in rendered
+    assert "- clustering key (CLUSTER BY): l_shipdate, l_orderkey" in rendered
+    assert "- legacy Z-ORDER columns: l_partkey" in rendered
+    assert "first 32 columns in schema order" in rendered
+    assert "- files: 4,096, averaging 8.0 MiB" in rendered
+    assert "deletion vectors are enabled" in rendered
+
+
+def test_file_count_renders_without_an_average_size_when_the_engine_reported_none() -> None:
+    layout = PhysicalLayout(
+        engine="databricks",
+        ref=RelationRef(catalog="main", namespace="tpch", name="orders"),
+        create_statement="CREATE TABLE main.tpch.orders (...) USING delta",
+        num_files=12,
+    )
+    context = GroundedContext(
+        engine="databricks",
+        namespace="tpch",
+        level=GroundingLevel.LAYOUT,
+        relations=(
+            RelationContext(
+                detail=RelationDetail(
+                    ref=layout.ref, columns=(), create_statement="CREATE TABLE x"
+                ),
+                layout=layout,
+            ),
+        ),
+    )
+
+    rendered = context.render()
+    assert "- files: 12" in rendered
+    assert "averaging" not in rendered
+
+
+def test_layout_prefers_an_explicit_statistics_column_list_over_the_ordinal_rule() -> None:
+    layout = PhysicalLayout(
+        engine="databricks",
+        ref=RelationRef(catalog="main", namespace="tpch", name="orders"),
+        create_statement="CREATE TABLE main.tpch.orders (...) USING delta",
+        stats_indexed_columns=32,
+        stats_columns=("o_orderdate", "o_custkey"),
+    )
+    context = GroundedContext(
+        engine="databricks",
+        namespace="tpch",
+        level=GroundingLevel.LAYOUT,
+        relations=(
+            RelationContext(
+                detail=RelationDetail(
+                    ref=layout.ref, columns=(), create_statement="CREATE TABLE x"
+                ),
+                layout=layout,
+            ),
+        ),
+    )
+
+    rendered = context.render()
+    assert "collected for: o_orderdate, o_custkey" in rendered
+    assert "first 32 columns" not in rendered

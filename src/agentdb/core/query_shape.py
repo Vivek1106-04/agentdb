@@ -23,7 +23,7 @@ from dataclasses import dataclass
 import sqlglot
 from sqlglot import exp
 
-DIALECTS = {"clickhouse": "clickhouse", "postgres": "postgres"}
+DIALECTS = {"clickhouse": "clickhouse", "databricks": "databricks"}
 """Engine name to ``sqlglot`` dialect. Both engines in scope are supported."""
 
 

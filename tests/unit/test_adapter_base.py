@@ -34,7 +34,7 @@ class _StubAdapter(BaseAdapter):
 def test_supports_reports_declared_capabilities() -> None:
     adapter = _StubAdapter()
     assert adapter.supports(Capability.SORT_KEY) is True
-    assert adapter.supports(Capability.HYPOTHETICAL_INDEX) is False
+    assert adapter.supports(Capability.CLUSTERING_KEY) is False
 
 
 def test_require_passes_for_a_declared_capability() -> None:
@@ -47,11 +47,11 @@ def test_require_refuses_rather_than_faking_an_unsupported_capability() -> None:
 
     # Act
     with pytest.raises(UnsupportedCapabilityError) as caught:
-        adapter.require(Capability.HYPOTHETICAL_INDEX)
+        adapter.require(Capability.CLUSTERING_KEY)
 
     # Assert — the failure names the capability so a caller can branch on it
-    assert caught.value.capability is Capability.HYPOTHETICAL_INDEX
-    assert "clickhouse adapter does not support hypothetical_index" in str(caught.value)
+    assert caught.value.capability is Capability.CLUSTERING_KEY
+    assert "clickhouse adapter does not support clustering_key" in str(caught.value)
 
 
 def test_base_adapter_declares_no_capabilities_by_default() -> None:
@@ -109,5 +109,5 @@ def test_a_suggestion_is_optional_but_the_shape_is_not() -> None:
 
 
 def test_unsupported_capability_tells_the_caller_how_to_avoid_it() -> None:
-    error = UnsupportedCapabilityError("postgres", Capability.PROJECTION)
+    error = UnsupportedCapabilityError("databricks", Capability.PROJECTION)
     assert error.as_dict()["suggestion"] == ("check adapter.supports('projection') before calling")

@@ -34,14 +34,21 @@ from agentdb.adapters.models import (
 class Capability(StrEnum):
     """What an adapter can do. Absence is a fact, not a gap to paper over."""
 
-    HYPOTHETICAL_INDEX = "hypothetical_index"
-    """Postgres via hypopg: cost a candidate index without building it."""
-
-    ANALYZE_PLAN = "analyze_plan"
-    """Plans carry measured row counts (Postgres ``EXPLAIN ANALYZE``)."""
-
+    # planning
     ESTIMATE_ONLY_PLAN = "estimate_only_plan"
-    """Plans are estimates only; there is no ANALYZE (ClickHouse)."""
+    """Plans are estimates only; neither engine has an executing EXPLAIN."""
+
+    COST_ANNOTATED_PLAN = "cost_annotated_plan"
+    """Databricks ``EXPLAIN COST``: cost and statistics annotations, and only
+    meaningful once ``ANALYZE`` has run for the columns involved (SPEC §8.2)."""
+
+    POST_HOC_PLAN_METRICS = "post_hoc_plan_metrics"
+    """Measured plan metrics exist, but only *after* execution — Databricks query
+    profile and ``system.query.history``."""
+
+    # physical design — ClickHouse
+    SORT_KEY = "sort_key"
+    """The relation has an ``ORDER BY`` key that governs granule pruning."""
 
     SKIP_INDEX = "skip_index"
     """ClickHouse data-skipping indexes."""
@@ -49,17 +56,52 @@ class Capability(StrEnum):
     PROJECTION = "projection"
     """ClickHouse projections."""
 
-    SORT_KEY = "sort_key"
-    """The relation has an ``ORDER BY`` key that governs granule pruning."""
+    GRANULE_PRUNING = "granule_pruning"
+    """Pruning is reported in marks/granules (ClickHouse)."""
+
+    # physical design — Databricks
+    CLUSTERING_KEY = "clustering_key"
+    """Databricks liquid clustering (``CLUSTER BY``)."""
+
+    ZORDER = "zorder"
+    """Databricks legacy Z-ORDER, mined from ``DESCRIBE HISTORY``."""
+
+    FILE_PRUNING = "file_pruning"
+    """Pruning is reported in Delta files, not granules."""
+
+    DATA_SKIPPING_STATS = "data_skipping_stats"
+    """Per-file min/max/nullCount statistics, collected for a bounded column set."""
+
+    DELETION_VECTORS = "deletion_vectors"
+    """Deleted rows are masked rather than rewritten."""
+
+    VECTORIZED_ENGINE = "vectorized_engine"
+    """Databricks Photon; a query shape can fall off it silently."""
+
+    THREE_LEVEL_NAMESPACE = "three_level_namespace"
+    """Names are ``catalog.schema.table`` (Unity Catalog)."""
+
+    # shared
+    PARTITION_PRUNING = "partition_pruning"
+    """Partition predicates remove data before the scan."""
+
+    SHADOW_VALIDATION = "shadow_validation"
+    """A sampled copy of a relation can be built to measure a design change
+    (SPEC §9.2.F). One mechanism, both engines."""
 
     WORKLOAD_LOG = "workload_log"
-    """``pg_stat_statements`` or ``system.query_log`` is readable."""
+    """``system.query_log`` or ``system.query.history`` is readable."""
 
     COLUMN_STATS = "column_stats"
     """Column distribution facts are obtainable, by probe or from system tables."""
 
     SAMPLING = "sampling"
-    """The engine can read a declared fraction of a relation cheaply."""
+    """The engine can read a declared fraction of a relation cheaply.
+
+    Beyond the SPEC §6 list, and kept because profiling depends on it: ClickHouse
+    ``SAMPLE`` needs a sampling key and Databricks ``TABLESAMPLE`` does not, and a
+    profile that silently full-scanned instead is a cost the caller must be able
+    to predict."""
 
 
 class AdapterError(RuntimeError):

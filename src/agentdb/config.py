@@ -115,6 +115,49 @@ the payload states how many of the relation's columns it covered, so a partial
 profile is never mistaken for a complete one.
 """
 
+# --- Databricks (SPEC Appendix A, spec 1.2) --------------------------------
+
+DELTA_DEFAULT_STATS_COLUMNS: Final = 32
+"""``delta.dataSkippingNumIndexedCols`` when the table does not set it.
+
+Delta collects per-file statistics for the first N columns in schema order only.
+Assuming this default is what makes ``STATS_NOT_COLLECTED`` computable on a table
+whose properties are silent, and it is the fact behind the warning: a filter on
+column 40 of a wide table skips no files at all.
+"""
+
+CLUSTERING_KEY_MAX_COLUMNS: Final = 4
+"""Cap on a proposed liquid clustering key.
+
+Databricks' own guidance keeps clustering keys short; past four columns the
+statistics per file stop separating and the key costs more than it prunes.
+"""
+
+SMALL_FILE_COUNT_THRESHOLD: Final = 1_000
+"""``numFiles`` above which ``SMALL_FILES`` may fire. Below it, per-file overhead
+is not what the query is spending its time on."""
+
+SMALL_FILE_BYTES_THRESHOLD: Final = 32 * 1024 * 1024
+"""Average file size below which a table counts as fragmented.
+
+Delta's default target file size is 128 MiB; at a quarter of that, skipping is
+coarse and the scan pays list-and-open costs per file."""
+
+PHOTON_COVERAGE_THRESHOLD: Final = 0.8
+"""Fraction of plan nodes on Photon below which ``PHOTON_FALLBACK`` fires.
+
+Photon falls back per node, silently, and only the absence of a ``Photon`` name
+prefix reveals it — so the threshold is on coverage, not on a reported flag."""
+
+DBX_SHADOW_SAMPLE_PERCENT: Final = 1.0
+"""``TABLESAMPLE`` percent for Databricks shadow validation (SPEC §9.2.F)."""
+
+DBX_WAREHOUSE_WARMUP_STATEMENT_EXCLUDED: Final = True
+"""Never time the cold-start statement of a serverless warehouse (SPEC §8.2).
+
+A warehouse scaled to zero adds tens of seconds to its first statement. Timing it
+would attribute infrastructure latency to the agent."""
+
 SHADOW_TABLE_MAX_ROWS: Final = 10_000_000
 """Hard row cap on an advisor shadow-validation table (SPEC §9.1.B)."""
 
@@ -204,6 +247,12 @@ class Config:
     default_sample_fraction: float = DEFAULT_SAMPLE_FRACTION
     profile_max_rows: int = PROFILE_MAX_ROWS
     max_profiled_columns: int = MAX_PROFILED_COLUMNS
+    delta_default_stats_columns: int = DELTA_DEFAULT_STATS_COLUMNS
+    clustering_key_max_columns: int = CLUSTERING_KEY_MAX_COLUMNS
+    small_file_count_threshold: int = SMALL_FILE_COUNT_THRESHOLD
+    small_file_bytes_threshold: int = SMALL_FILE_BYTES_THRESHOLD
+    photon_coverage_threshold: float = PHOTON_COVERAGE_THRESHOLD
+    dbx_shadow_sample_percent: float = DBX_SHADOW_SAMPLE_PERCENT
     shadow_table_max_rows: int = SHADOW_TABLE_MAX_ROWS
     allow_shadow: bool = ALLOW_SHADOW
     query_timeout_s: int = QUERY_TIMEOUT_S
@@ -227,6 +276,12 @@ class Config:
         "set_index_max_distinct",
         "profile_max_rows",
         "max_profiled_columns",
+        "delta_default_stats_columns",
+        "clustering_key_max_columns",
+        "small_file_count_threshold",
+        "small_file_bytes_threshold",
+        "photon_coverage_threshold",
+        "dbx_shadow_sample_percent",
         "shadow_table_max_rows",
         "query_timeout_s",
         "max_rows_to_read",
@@ -290,6 +345,24 @@ class Config:
             ),
             profile_max_rows=_env_int(source, "PROFILE_MAX_ROWS", PROFILE_MAX_ROWS),
             max_profiled_columns=_env_int(source, "MAX_PROFILED_COLUMNS", MAX_PROFILED_COLUMNS),
+            delta_default_stats_columns=_env_int(
+                source, "DELTA_DEFAULT_STATS_COLUMNS", DELTA_DEFAULT_STATS_COLUMNS
+            ),
+            clustering_key_max_columns=_env_int(
+                source, "CLUSTERING_KEY_MAX_COLUMNS", CLUSTERING_KEY_MAX_COLUMNS
+            ),
+            small_file_count_threshold=_env_int(
+                source, "SMALL_FILE_COUNT_THRESHOLD", SMALL_FILE_COUNT_THRESHOLD
+            ),
+            small_file_bytes_threshold=_env_int(
+                source, "SMALL_FILE_BYTES_THRESHOLD", SMALL_FILE_BYTES_THRESHOLD
+            ),
+            photon_coverage_threshold=_env_float(
+                source, "PHOTON_COVERAGE_THRESHOLD", PHOTON_COVERAGE_THRESHOLD
+            ),
+            dbx_shadow_sample_percent=_env_float(
+                source, "DBX_SHADOW_SAMPLE_PERCENT", DBX_SHADOW_SAMPLE_PERCENT
+            ),
             shadow_table_max_rows=_env_int(source, "SHADOW_TABLE_MAX_ROWS", SHADOW_TABLE_MAX_ROWS),
             allow_shadow=_env_bool(source, "ALLOW_SHADOW", ALLOW_SHADOW),
             query_timeout_s=_env_int(source, "QUERY_TIMEOUT_S", QUERY_TIMEOUT_S),

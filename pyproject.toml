@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "agentdb"
 version = "0.1.0"
-description = "Plan-grounded context layer and reproducible NL-to-SQL accuracy benchmark for ClickHouse and Postgres"
+description = "Plan-grounded context layer and reproducible NL-to-SQL accuracy benchmark for ClickHouse and Databricks"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 authors = [{ name = "Vivek Gangavarapu" }]
-keywords = ["clickhouse", "postgres", "mcp", "text-to-sql", "benchmark", "agents"]
+keywords = ["clickhouse", "databricks", "delta-lake", "mcp", "text-to-sql", "benchmark", "agents"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
@@ -110,7 +110,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-q --strict-markers --strict-config"
 markers = [
-  "e2e: requires live Postgres and/or ClickHouse (deselect with -m 'not e2e')",
+  "e2e: requires a live ClickHouse and/or Databricks warehouse (deselect with -m 'not e2e')",
 ]
 
 [tool.coverage.run]

@@ -124,8 +124,8 @@ def test_analyze_is_absent_because_clickhouse_cannot_measure_a_plan() -> None:
     adapter, _ = _adapter()
 
     assert adapter.supports(Capability.ESTIMATE_ONLY_PLAN)
-    assert not adapter.supports(Capability.ANALYZE_PLAN)
-    assert not adapter.supports(Capability.HYPOTHETICAL_INDEX)
+    assert not adapter.supports(Capability.COST_ANNOTATED_PLAN)
+    assert not adapter.supports(Capability.CLUSTERING_KEY)
 
 
 # --------------------------------------------------------------------------
@@ -380,9 +380,9 @@ async def test_asking_clickhouse_for_an_analyzed_plan_is_refused_not_approximate
     adapter, client = _adapter()
 
     with pytest.raises(UnsupportedCapabilityError) as caught:
-        await adapter.explain("SELECT 1", ExplainMode.ANALYZE)
+        await adapter.explain("SELECT 1", ExplainMode.COST)
 
-    assert caught.value.capability is Capability.ANALYZE_PLAN
+    assert caught.value.capability is Capability.COST_ANNOTATED_PLAN
     assert client.queries == []
 
 

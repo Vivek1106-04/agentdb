@@ -58,8 +58,8 @@ def test_a_query_nobody_can_parse_says_so_instead_of_guessing() -> None:
     assert shape.filter_columns == frozenset()
 
 
-def test_postgres_is_parsed_in_its_own_dialect() -> None:
-    shape = analyze('SELECT "user" FROM events WHERE ts > now() LIMIT 5', "postgres")
+def test_databricks_is_parsed_in_its_own_dialect() -> None:
+    shape = analyze('SELECT "user" FROM events WHERE ts > now() LIMIT 5', "databricks")
 
     assert shape.parsed is True
     assert shape.tables == ("events",)
