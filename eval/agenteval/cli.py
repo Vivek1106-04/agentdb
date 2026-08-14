@@ -35,9 +35,11 @@ from agenteval.report import load_run, render
 from agenteval.runner import Cell, RunSpec, new_run_id, run
 from agenteval.suites import SUITES_DIR, load_builtin
 from agenteval.systems.base import ModelSpec, SystemUnderTest
+from agenteval.systems.grounded import GroundedSystem
 from agenteval.systems.mcp_generic import McpSystem
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
 from agenteval.systems.oracle import OracleSystem
+from agenteval.systems.providers import ProviderConfig, load_provider, load_provider_configs
 from agenteval.systems.raw_schema import ARM_NAME as BASELINE_ARM
 from agenteval.systems.raw_schema import RawSchemaSystem
 from agenteval.traces import TraceWriter
@@ -46,6 +48,7 @@ DEFAULT_SUITE = "clickbench_nl"
 DEFAULT_MODEL = f"{PROVIDER}/claude-opus-5"
 DEFAULT_RAW = Path("results/raw")
 DEFAULT_SERVERS = Path("eval/servers.yaml")
+DEFAULT_PROVIDERS = Path("eval/providers.yaml")
 DEFAULT_REPORT = Path("results/REPORT.md")
 
 QUICK_TASKS = 5
@@ -82,6 +85,7 @@ class BenchOptions:
     limit: int | None = None
     out: Path = DEFAULT_RAW
     servers: Path = DEFAULT_SERVERS
+    providers: Path = DEFAULT_PROVIDERS
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +123,9 @@ def parse_args(argv: Sequence[str]) -> Command:
     bench.add_argument(
         "--servers", type=Path, default=DEFAULT_SERVERS, help="Family S server configs"
     )
+    bench.add_argument(
+        "--providers", type=Path, default=DEFAULT_PROVIDERS, help="Family A provider configs"
+    )
 
     report = commands.add_parser("report", help="regenerate REPORT.md from traces")
     report.add_argument("--from-raw", type=Path, default=DEFAULT_RAW, dest="from_raw")
@@ -145,6 +152,7 @@ def parse_args(argv: Sequence[str]) -> Command:
         limit=QUICK_TASKS if args.quick else args.limit,
         out=args.out,
         servers=args.servers,
+        providers=args.providers,
     )
 
 
@@ -172,6 +180,13 @@ def load_server_configs(path: Path) -> dict[str, McpServerConfig]:
     return {server.name: server for server in load_servers(path)}
 
 
+def load_grounded_configs(path: Path) -> dict[str, ProviderConfig]:
+    """Family A grounded arms, by arm name. A missing file means A0 and A7 only."""
+    if not path.is_file():
+        return {}
+    return {config.arm: config for config in load_provider_configs(path)}
+
+
 async def build_systems(
     arms: Sequence[str],
     executor: QueryExecutor,
@@ -179,6 +194,7 @@ async def build_systems(
     client: ModelClient,
     tool_client: ToolUsingClient,
     servers: Mapping[str, McpServerConfig],
+    providers: Mapping[str, ProviderConfig],
     connector: Connector,
     sessions: list[McpSession],
 ) -> tuple[SystemUnderTest, ...]:
@@ -188,14 +204,26 @@ async def build_systems(
     them even when the run fails: a leaked server process poisons the next
     arm's timings.
     """
-    unknown = [arm for arm in arms if arm not in ARMS and arm not in servers]
+    known = {*ARMS, *servers, *providers}
+    unknown = [arm for arm in arms if arm not in known]
     if unknown:
-        raise CliError(f"unknown arm(s) {unknown}; available: {sorted({*ARMS, *servers})}")
+        raise CliError(f"unknown arm(s) {unknown}; available: {sorted(known)}")
 
     built: list[SystemUnderTest] = []
     for arm in arms:
         if arm in ARMS:
             built.append(ARMS[arm](executor, client))
+            continue
+        if arm in providers:
+            config = providers[arm]
+            built.append(
+                GroundedSystem.create(
+                    arm=arm,
+                    provider=await load_provider(config.provider, config.options),
+                    executor=executor,
+                    client=client,
+                )
+            )
             continue
         session = await connector(servers[arm])
         sessions.append(session)
@@ -241,6 +269,7 @@ async def run_bench(
             client=client_factory(),
             tool_client=tool_client_factory(),
             servers=load_server_configs(options.servers),
+            providers=load_grounded_configs(options.providers),
             connector=connector,
             sessions=sessions,
         )

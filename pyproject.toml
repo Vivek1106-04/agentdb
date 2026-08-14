@@ -148,5 +148,14 @@ forbidden_modules = ["agentdb"]
 [[tool.importlinter.contracts]]
 name = "layers"
 type = "layers"
-layers = ["agentdb.adapters", "agentdb.config"]
+layers = ["agentdb.bench", "agentdb.core", "agentdb.adapters", "agentdb.config"]
 exhaustive = false
+
+# Core reasons about engines through the Adapter protocol and the capability
+# flags beside it. Reaching for a concrete adapter would put engine knowledge
+# back into core and make a third engine a refactor (SPEC §4.1.1).
+[[tool.importlinter.contracts]]
+name = "core knows the adapter contract, never a concrete engine"
+type = "forbidden"
+source_modules = ["agentdb.core"]
+forbidden_modules = ["agentdb.adapters.clickhouse", "agentdb.adapters.clickhouse_sql"]

@@ -91,6 +91,23 @@ DEFAULT_SAMPLE_FRACTION: Final = 0.01
 Column profiling must never full-scan a hundred-million-row table (SPEC §8.1).
 """
 
+PROFILE_MAX_ROWS: Final = 1_000_000
+"""Row ceiling for one column-profiling probe.
+
+Separate from :data:`MAX_ROWS_TO_READ`, which bounds a query an agent asked for.
+A profile is work the agent did not ask to wait for, so it is bounded far lower:
+on a table with no sampling key this is the size of the prefix actually read.
+"""
+
+MAX_PROFILED_COLUMNS: Final = 30
+"""Columns profiled per relation when assembling a grounded context (SPEC §13.1).
+
+ClickBench's ``hits`` has 105 columns and each profile costs a probe, so the
+budget bounds both latency and prompt size. Key columns are profiled first and
+the payload states how many of the relation's columns it covered, so a partial
+profile is never mistaken for a complete one.
+"""
+
 SHADOW_TABLE_MAX_ROWS: Final = 10_000_000
 """Hard row cap on an advisor shadow-validation table (SPEC §9.1.B)."""
 
@@ -177,6 +194,8 @@ class Config:
     bloom_min_card_ratio: float = BLOOM_MIN_CARD_RATIO
     set_index_max_distinct: int = SET_INDEX_MAX_DISTINCT
     default_sample_fraction: float = DEFAULT_SAMPLE_FRACTION
+    profile_max_rows: int = PROFILE_MAX_ROWS
+    max_profiled_columns: int = MAX_PROFILED_COLUMNS
     shadow_table_max_rows: int = SHADOW_TABLE_MAX_ROWS
     allow_shadow: bool = ALLOW_SHADOW
     query_timeout_s: int = QUERY_TIMEOUT_S
@@ -197,6 +216,8 @@ class Config:
         "sort_key_cardinality_budget",
         "bloom_min_card_ratio",
         "set_index_max_distinct",
+        "profile_max_rows",
+        "max_profiled_columns",
         "shadow_table_max_rows",
         "query_timeout_s",
         "max_rows_to_read",
@@ -255,6 +276,8 @@ class Config:
             default_sample_fraction=_env_float(
                 source, "DEFAULT_SAMPLE_FRACTION", DEFAULT_SAMPLE_FRACTION
             ),
+            profile_max_rows=_env_int(source, "PROFILE_MAX_ROWS", PROFILE_MAX_ROWS),
+            max_profiled_columns=_env_int(source, "MAX_PROFILED_COLUMNS", MAX_PROFILED_COLUMNS),
             shadow_table_max_rows=_env_int(source, "SHADOW_TABLE_MAX_ROWS", SHADOW_TABLE_MAX_ROWS),
             allow_shadow=_env_bool(source, "ALLOW_SHADOW", ALLOW_SHADOW),
             query_timeout_s=_env_int(source, "QUERY_TIMEOUT_S", QUERY_TIMEOUT_S),

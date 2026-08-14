@@ -21,6 +21,7 @@ from agenteval.cli import (
     default_client,
     default_executor,
     default_tool_client,
+    load_grounded_configs,
     load_server_configs,
     parse_args,
     parse_model,
@@ -39,6 +40,7 @@ from agenteval.runner import Cell
 from agenteval.scorer import Score
 from agenteval.systems.base import SystemUnderTest
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
+from agenteval.systems.providers import ProviderConfig
 from agenteval.systems.raw_schema import ARM_NAME
 from agenteval.traces import read_records
 from tests.harness_fakes import FakeExecutor, ScriptedModelClient
@@ -141,6 +143,7 @@ async def _build(arms: list[str], **overrides: object) -> tuple[SystemUnderTest,
         "client": ScriptedModelClient(),
         "tool_client": StubToolClient(),
         "servers": {},
+        "providers": {},
         "connector": _refuse_to_connect,
         "sessions": [],
     }
@@ -163,6 +166,45 @@ async def test_both_shipped_arms_are_constructible() -> None:
     systems = await _build([ARM_NAME, ORACLE_ARM])
 
     assert [system.name for system in systems] == [ARM_NAME, ORACLE_ARM]
+
+
+@dataclass
+class StubProvider:
+    """A context provider the CLI can resolve by dotted path, with no engine behind it."""
+
+    name: str = "agentdb/A1_stats"
+    version: str = "1.0"
+    fingerprint: str = "sha256:stub-provider"
+
+    async def context(self, *, namespace: str, question: str) -> str:
+        return f"grounded context for {namespace}"
+
+
+def stub_provider_factory(**options: object) -> StubProvider:
+    """Named in a :class:`ProviderConfig` so the loader resolves this module."""
+    return StubProvider(name=str(options.get("name", "agentdb/A1_stats")))
+
+
+async def test_a_family_a_arm_is_built_from_its_provider_config() -> None:
+    config = ProviderConfig(
+        arm="A1_stats",
+        provider="tests.unit.test_cli:stub_provider_factory",
+        options={"name": "agentdb/A1_stats"},
+    )
+
+    systems = await _build(["A1_stats"], providers={"A1_stats": config})
+
+    assert [system.name for system in systems] == ["A1_stats"]
+
+
+def test_a_missing_provider_catalogue_simply_means_no_family_a_arms(tmp_path: Path) -> None:
+    assert load_grounded_configs(tmp_path / "absent.yaml") == {}
+
+
+def test_the_shipped_provider_catalogue_is_keyed_by_arm() -> None:
+    configs = load_grounded_configs(Path("eval/providers.yaml"))
+
+    assert sorted(configs) == ["A1_stats", "A2_layout"]
 
 
 async def test_an_arm_that_does_not_exist_yet_is_named() -> None:

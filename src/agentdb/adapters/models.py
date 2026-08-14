@@ -26,6 +26,9 @@ Engine = Literal["postgres", "clickhouse"]
 SampleMethod = Literal["full", "sample", "system_table", "unavailable"]
 """How a profile figure was obtained. Never present an estimate as exact."""
 
+RelationKind = Literal["table", "view", "materialized_view", "foreign_table"]
+"""What a listed relation is. Views carry no physical layout of their own."""
+
 
 class ExplainMode(StrEnum):
     """Which plan an adapter should produce.
@@ -80,7 +83,7 @@ class Relation:
     """A relation as it appears in a listing: cheap facts only."""
 
     ref: RelationRef
-    kind: Literal["table", "view", "materialized_view", "foreign_table"]
+    kind: RelationKind
     engine_type: str | None
     """Storage engine, e.g. ``MergeTree``. ``None`` on Postgres heap tables."""
 

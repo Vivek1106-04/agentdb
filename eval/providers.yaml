@@ -1,0 +1,20 @@
+# Family A arms — agentdb's context ablations (SPEC §11.3).
+#
+# The harness never imports agentdb: each arm names a factory by dotted path and
+# the factory is resolved at run time. That indirection is the point. Anyone can
+# add a row here for their own grounding service and be scored on the same tasks,
+# with the same model, the same seeds and the same grader.
+#
+# A0_baseline and A7_oracle are built in — they need no grounding layer at all.
+
+- arm: A1_stats
+  provider: agentdb.bench.provider:clickhouse_provider
+  options:
+    level: stats
+    name: agentdb/A1_stats
+
+- arm: A2_layout
+  provider: agentdb.bench.provider:clickhouse_provider
+  options:
+    level: layout
+    name: agentdb/A2_layout

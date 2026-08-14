@@ -158,8 +158,19 @@ class Adapter(Protocol):
     agent turns concurrently under a permit pool.
     """
 
-    engine: Engine
-    capabilities: frozenset[Capability]
+    @property
+    def engine(self) -> Engine:
+        """Which engine this adapter speaks to.
+
+        Declared read-only so an implementation can be a frozen dataclass: an
+        adapter's identity must not drift halfway through a benchmark run.
+        """
+        ...
+
+    @property
+    def capabilities(self) -> frozenset[Capability]:
+        """What this adapter can do. Absence is a fact, not a gap to paper over."""
+        ...
 
     def supports(self, capability: Capability) -> bool:
         """Whether ``capability`` is available on this adapter."""
