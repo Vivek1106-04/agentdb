@@ -124,6 +124,7 @@ def summarize(raw: RawPlan, *, files_total: Mapping[str, int] | None = None) -> 
         sql=raw.sql,
         pruning_ratio=ratio,
         pruning_unit="file" if considered else None,
+        pruning_source="estimated" if ratio is not None else None,
         full_scan_relations=tuple(
             scan.relation
             for scan in scans

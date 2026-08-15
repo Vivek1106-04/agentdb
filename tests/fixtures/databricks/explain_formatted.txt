@@ -17,58 +17,58 @@ AdaptiveSparkPlan (14)
 
 
 (1) PhotonScan parquet samples.tpch.lineitem
-Output [3]: [l_extendedprice#18403, l_returnflag#18406, l_shipdate#18408]
-DictionaryFilters: [(l_shipdate#18408 >= 1995-01-01)]
+Output [3]: [l_extendedprice#21946, l_returnflag#21949, l_shipdate#21951]
+DictionaryFilters: [(l_shipdate#21951 >= 1995-01-01)]
 Location: PreparedDeltaFileIndex [s3://system-tables-prod-us-east-2-uc-metastore-bucket/metastore/b622f329-0f39-444f-9dbb-5733ba3e2021/tables/281c5907-7501-437f-890a-e62e3e631465]
 ReadSchema: struct<l_extendedprice:decimal(18,2),l_returnflag:string,l_shipdate:date>
-RequiredDataFilters: [isnotnull(l_shipdate#18408), (l_shipdate#18408 >= 1995-01-01)]
+RequiredDataFilters: [isnotnull(l_shipdate#21951), (l_shipdate#21951 >= 1995-01-01)]
 
 (2) PhotonProject
-Input [3]: [l_extendedprice#18403, l_returnflag#18406, l_shipdate#18408]
-Arguments: [l_extendedprice#18403, l_returnflag#18406]
+Input [3]: [l_extendedprice#21946, l_returnflag#21949, l_shipdate#21951]
+Arguments: [l_extendedprice#21946, l_returnflag#21949]
 
 (3) PhotonGroupingAgg
-Input [2]: [l_extendedprice#18403, l_returnflag#18406]
-Arguments: [l_returnflag#18406], [partial_count(1) AS count#18419L, partial_sum(l_extendedprice#18403) AS (sum#18422, isEmpty#18423)], [count#18418L, sum#18420, isEmpty#18421], [l_returnflag#18406, count#18419L, sum#18422, isEmpty#18423], false
+Input [2]: [l_extendedprice#21946, l_returnflag#21949]
+Arguments: [l_returnflag#21949], [partial_count(1) AS count#21962L, partial_sum(l_extendedprice#21946) AS (sum#21965, isEmpty#21966)], [count#21961L, sum#21963, isEmpty#21964], [l_returnflag#21949, count#21962L, sum#21965, isEmpty#21966], false
 
 (4) PhotonShuffleExchangeSink
-Input [4]: [l_returnflag#18406, count#18419L, sum#18422, isEmpty#18423]
-Arguments: hashpartitioning(l_returnflag#18406, 16)
+Input [4]: [l_returnflag#21949, count#21962L, sum#21965, isEmpty#21966]
+Arguments: hashpartitioning(l_returnflag#21949, 16)
 
 (5) PhotonShuffleMapStage
-Input [4]: [l_returnflag#18406, count#18419L, sum#18422, isEmpty#18423]
-Arguments: ENSURE_REQUIREMENTS, [id=#8645]
+Input [4]: [l_returnflag#21949, count#21962L, sum#21965, isEmpty#21966]
+Arguments: ENSURE_REQUIREMENTS, [id=#10302]
 
 (6) PhotonShuffleExchangeSource
-Input [4]: [l_returnflag#18406, count#18419L, sum#18422, isEmpty#18423]
+Input [4]: [l_returnflag#21949, count#21962L, sum#21965, isEmpty#21966]
 
 (7) PhotonGroupingAgg
-Input [4]: [l_returnflag#18406, count#18419L, sum#18422, isEmpty#18423]
-Arguments: [l_returnflag#18406], [finalmerge_count(merge count#18419L) AS count(1)#18414L, finalmerge_sum(merge sum#18422, isEmpty#18423) AS sum(l_extendedprice)#18415], [count(1)#18414L, sum(l_extendedprice)#18415], [l_returnflag#18406, count(1)#18414L AS orders#18390L, sum(l_extendedprice)#18415 AS revenue#18391], true
+Input [4]: [l_returnflag#21949, count#21962L, sum#21965, isEmpty#21966]
+Arguments: [l_returnflag#21949], [finalmerge_count(merge count#21962L) AS count(1)#21957L, finalmerge_sum(merge sum#21965, isEmpty#21966) AS sum(l_extendedprice)#21958], [count(1)#21957L, sum(l_extendedprice)#21958], [l_returnflag#21949, count(1)#21957L AS orders#21933L, sum(l_extendedprice)#21958 AS revenue#21934], true
 
 (8) PhotonShuffleExchangeSink
-Input [3]: [l_returnflag#18406, orders#18390L, revenue#18391]
-Arguments: rangepartitioning(revenue#18391 DESC NULLS LAST, 16)
+Input [3]: [l_returnflag#21949, orders#21933L, revenue#21934]
+Arguments: rangepartitioning(revenue#21934 DESC NULLS LAST, 16)
 
 (9) PhotonShuffleMapStage
-Input [3]: [l_returnflag#18406, orders#18390L, revenue#18391]
-Arguments: ENSURE_REQUIREMENTS, [id=#8651]
+Input [3]: [l_returnflag#21949, orders#21933L, revenue#21934]
+Arguments: ENSURE_REQUIREMENTS, [id=#10308]
 
 (10) PhotonShuffleExchangeSource
-Input [3]: [l_returnflag#18406, orders#18390L, revenue#18391]
+Input [3]: [l_returnflag#21949, orders#21933L, revenue#21934]
 
 (11) PhotonSort
-Input [3]: [l_returnflag#18406, orders#18390L, revenue#18391]
-Arguments: [revenue#18391 DESC NULLS LAST]
+Input [3]: [l_returnflag#21949, orders#21933L, revenue#21934]
+Arguments: [revenue#21934 DESC NULLS LAST]
 
 (12) PhotonColumnarToRow
-Input [3]: [l_returnflag#18406, orders#18390L, revenue#18391]
+Input [3]: [l_returnflag#21949, orders#21933L, revenue#21934]
 
 (13) PhotonResultStage
-Input [3]: [l_returnflag#18406, orders#18390L, revenue#18391]
+Input [3]: [l_returnflag#21949, orders#21933L, revenue#21934]
 
 (14) AdaptiveSparkPlan
-Output [3]: [l_returnflag#18406, orders#18390L, revenue#18391]
+Output [3]: [l_returnflag#21949, orders#21933L, revenue#21934]
 Arguments: isFinalPlan=false
 
 

@@ -14,6 +14,7 @@ and a hopeful ``LIKE`` (SPEC §8.2).
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import os
 from collections.abc import Callable, Mapping
@@ -22,6 +23,7 @@ from types import ModuleType
 from typing import Any
 from urllib.parse import urlsplit
 
+from agentdb.adapters import databricks_metrics as dbx_metrics
 from agentdb.adapters.base import EngineConnectionError
 from agentdb.adapters.databricks import DatabricksClient, StatementResult
 
@@ -146,7 +148,22 @@ class StatementExecutionClient:
     live run. Requiring it here means a caller cannot forget it and discover the
     problem against a real warehouse."""
 
+    history: Any = None
+    """The query-history API, source of the only pruning evidence Databricks has.
+
+    ``None`` on a client built for execution alone; :meth:`query_info` then
+    reports nothing rather than pretending the metrics were zero."""
+
+    query_filter: Callable[..., Any] = dict
+    """Builds the history filter, by keyword: ``query_filter(statement_ids=[…])``.
+    Injected for the same reason as :attr:`parameter` — it is a typed SDK object."""
+
     wait_timeout: str = DEFAULT_WAIT_TIMEOUT
+    metrics_attempts: int = 3
+    """History lookups before giving up. One sufficed on every live probe; the
+    retries exist for a statement still finishing when the lookup arrives."""
+
+    metrics_poll_seconds: float = 1.0
 
     async def statement(
         self,
@@ -185,6 +202,41 @@ class StatementExecutionClient:
         if timeout_s is None:
             return self.wait_timeout
         return f"{min(max(timeout_s, MIN_WAIT_SECONDS), MAX_WAIT_SECONDS)}s"
+
+    async def query_info(self, statement_id: str) -> Mapping[str, Any] | None:
+        """The query-history entry for ``statement_id``, with measured metrics.
+
+        Looked up by primary key through the history API's own filter rather than
+        by scanning a listing: the id came back from the statement submission, so
+        attribution needs no string matching and no time window (SPEC §8.2).
+
+        The alternative source, ``system.query.history``, is not used here. It was
+        measured 1,514 to 23,290 seconds behind the warehouse clock on a Free
+        Edition workspace, so a benchmark joining to it would attribute nothing.
+        """
+        if not statement_id or self.history is None:
+            return None
+        for attempt in range(self.metrics_attempts):
+            if attempt:
+                await asyncio.sleep(self.metrics_poll_seconds)
+            entry = self._history_entry(statement_id)
+            if entry is not None and dbx_metrics.is_final(entry):
+                return entry
+        return None
+
+    def _history_entry(self, statement_id: str) -> Mapping[str, Any] | None:
+        """One history lookup, or ``None`` when the API has not recorded it yet."""
+        response = self.history.list(
+            filter_by=self.query_filter(statement_ids=[statement_id]),
+            include_metrics=True,
+            max_results=1,
+        )
+        entries = getattr(response, "res", None) or ()
+        for entry in entries:
+            payload = entry.as_dict() if hasattr(entry, "as_dict") else None
+            if isinstance(payload, Mapping):
+                return payload
+        return None
 
 
 def _api_value(value: object) -> str:
@@ -246,12 +298,15 @@ async def build_client(
             suggestion="check AGENTDB_DBX_HOST and the credentials in the environment",
         ) from exc
 
+    service = importer(PARAMETER_MODULE)
     client: DatabricksClient = StatementExecutionClient(
         api=workspace.statement_execution,
         warehouse_id=target.warehouse_id,
         catalog=target.catalog,
         schema=target.schema,
-        parameter=importer(PARAMETER_MODULE).StatementParameterListItem,
+        parameter=service.StatementParameterListItem,
+        history=workspace.query_history,
+        query_filter=service.QueryFilter,
     )
     return client
 

@@ -1,0 +1,10 @@
+{
+ "statement_id": "01f198bf-d30e-1fca-ba31-da253b07b9d1",
+ "files_read": 10,
+ "files_pruned": 0,
+ "rows_read": 17092498,
+ "bytes_read": 173384916,
+ "bytes_in_files_read": 753837113,
+ "from_result_cache": false,
+ "photon_time_ms": 1893.0
+}

@@ -14,13 +14,24 @@ warnings computable.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Literal
+
+from agentdb.adapters.models import QueryMetrics
 
 PruningUnit = Literal["granule", "file"]
 """What a pruning ratio counts. ClickHouse prunes granules, Databricks prunes
 files; a ratio is meaningless without the unit beside it (SPEC §7)."""
+
+PruningSource = Literal["estimated", "measured"]
+"""Whether a pruning ratio came from the plan or from the engine's own metrics.
+
+Not cosmetic. ClickHouse states granule pruning in the plan, before the query
+runs. Databricks states nothing: its Photon scans print no file counts at all, so
+a Databricks ratio can only ever be ``measured``, and only after execution. A
+report that put the two in one column without this label would be comparing a
+prediction against a result."""
 
 
 class PlanOp(StrEnum):
@@ -208,8 +219,19 @@ class PlanSummary:
     """Always reported alongside :attr:`pruning_ratio`, so a reader never compares
     a granule ratio to a file ratio without noticing (SPEC §7)."""
 
+    pruning_source: PruningSource | None = None
+    """Where :attr:`pruning_ratio` came from. ``None`` when there is no ratio."""
+
     full_scan_relations: tuple[str, ...] = ()
     estimated_bytes_read: int | None = None
+    measured_bytes_read: int | None = None
+    """Bytes the engine reported fetching. ``None`` until the query has run."""
+
+    bytes_ratio: float | None = None
+    """Bytes fetched over bytes in the files opened, when measured. Column
+    projection and in-file skipping — a different mechanism from file pruning,
+    reported beside it rather than folded into it."""
+
     photon_coverage: float | None = None
     """Databricks: fraction of plan nodes that ran on Photon. ``None`` elsewhere."""
 
@@ -222,16 +244,29 @@ class PlanSummary:
 
     def with_warnings(self, warnings: tuple[PlanWarning, ...]) -> PlanSummary:
         """A copy carrying ``warnings``. Summaries are built, never mutated."""
-        return PlanSummary(
-            root=self.root,
-            engine=self.engine,
-            sql=self.sql,
-            pruning_ratio=self.pruning_ratio,
-            pruning_unit=self.pruning_unit,
-            full_scan_relations=self.full_scan_relations,
-            estimated_bytes_read=self.estimated_bytes_read,
-            photon_coverage=self.photon_coverage,
-            warnings=warnings,
+        return replace(self, warnings=warnings)
+
+    def with_measured(self, metrics: QueryMetrics) -> PlanSummary:
+        """A copy whose pruning evidence comes from what the engine measured.
+
+        The estimate is replaced rather than averaged with: where both exist the
+        measurement is simply better, and where the plan reported nothing — every
+        Photon plan on Databricks — this is the only evidence there is.
+
+        A cache hit or a metadata-only answer measures no data access, so those
+        leave the summary alone instead of overwriting a real estimate with a
+        zero that would read as flawless pruning.
+        """
+        ratio = metrics.pruning_ratio
+        if ratio is None:
+            return self
+        return replace(
+            self,
+            pruning_ratio=ratio,
+            pruning_unit="file" if metrics.engine == "databricks" else self.pruning_unit,
+            pruning_source="measured",
+            measured_bytes_read=metrics.bytes_read,
+            bytes_ratio=metrics.bytes_ratio,
         )
 
     def render(self) -> str:
@@ -244,10 +279,18 @@ class PlanSummary:
         if self.pruning_ratio is not None:
             kept = f"{self.pruning_ratio:.1%}"
             unit = self.pruning_unit or "unit"
-            lines.append(f"- {unit}s read after pruning: {kept} of those considered")
+            source = f" ({self.pruning_source})" if self.pruning_source else ""
+            lines.append(f"- {unit}s read after pruning: {kept} of those considered{source}")
+        if self.bytes_ratio is not None:
+            lines.append(
+                f"- bytes fetched from the files read: {self.bytes_ratio:.1%} "
+                "(column projection and in-file skipping)"
+            )
         for relation in self.full_scan_relations:
             lines.append(f"- full scan: {relation}")
-        if self.estimated_bytes_read is not None:
+        if self.measured_bytes_read is not None:
+            lines.append(f"- measured bytes read: {self.measured_bytes_read:,}")
+        elif self.estimated_bytes_read is not None:
             lines.append(f"- estimated bytes read: {self.estimated_bytes_read:,}")
         if self.photon_coverage is not None:
             lines.append(f"- plan nodes on Photon: {self.photon_coverage:.0%}")

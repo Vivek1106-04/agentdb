@@ -44,6 +44,8 @@ class FakeClient:
     responses: dict[str, FakeResult] = field(default_factory=dict)
     failure: Exception | None = None
     calls: list[tuple[str, Mapping[str, Any], dict[str, Any]]] = field(default_factory=list)
+    history: dict[str, Mapping[str, Any]] = field(default_factory=dict)
+    history_lookups: list[str] = field(default_factory=list)
 
     async def statement(
         self,
@@ -60,6 +62,10 @@ class FakeClient:
             if fragment in sql:
                 return response
         return FakeResult()
+
+    async def query_info(self, statement_id: str) -> Mapping[str, Any] | None:
+        self.history_lookups.append(statement_id)
+        return self.history.get(statement_id)
 
     def statements(self) -> list[str]:
         return [sql for sql, _, _ in self.calls]
@@ -318,9 +324,10 @@ async def test_building_a_client_without_the_sdk_says_what_to_install() -> None:
 
 
 async def test_building_a_client_wires_the_statement_execution_api() -> None:
-    workspace = SimpleNamespace(statement_execution=_Api(_response()))
+    history = _History()
+    workspace = SimpleNamespace(statement_execution=_Api(_response()), query_history=history)
     sdk = SimpleNamespace(WorkspaceClient=lambda **kwargs: workspace)
-    parameters = SimpleNamespace(StatementParameterListItem=_parameter)
+    parameters = SimpleNamespace(StatementParameterListItem=_parameter, QueryFilter=_filter)
 
     def importer(name: str) -> ModuleType:
         return cast(ModuleType, parameters if name == DBX_PARAMETER_MODULE else sdk)
@@ -331,6 +338,9 @@ async def test_building_a_client_wires_the_statement_execution_api() -> None:
     assert client.warehouse_id == "abc123"
     # the SDK's typed parameter class, not a dict builder
     assert client.parameter is _parameter
+    # and the history API, without which no Databricks pruning is ever measured
+    assert client.history is history
+    assert client.query_filter is _filter
 
 
 @pytest.mark.parametrize(
@@ -373,3 +383,191 @@ async def test_a_datetime_parameter_travels_in_iso_form() -> None:
     await client.statement("SELECT :start", parameters={"start": datetime(2026, 8, 14, tzinfo=UTC)})
 
     assert api.calls[0]["parameters"][0].value.startswith("2026-08-14T00:00:00")
+
+
+# -- measured pruning --------------------------------------------------------
+#
+# Databricks EXPLAIN carries no file counts, so a trace can only record what was
+# pruned by asking the warehouse afterwards. Every assertion below is about
+# refusing to record a number that is not a measurement.
+
+
+def _filter(*, statement_ids: list[str]) -> SimpleNamespace:
+    """Stand-in for the SDK's typed ``QueryFilter``."""
+    return SimpleNamespace(statement_ids=statement_ids)
+
+
+class _Entry:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def as_dict(self) -> dict[str, Any]:
+        return self._payload
+
+
+class _History:
+    def __init__(self, *entries: Any) -> None:
+        self.entries = list(entries)
+        self.calls: list[Any] = []
+
+    def list(self, **kwargs: Any) -> SimpleNamespace:
+        self.calls.append(kwargs)
+        return SimpleNamespace(res=self.entries)
+
+
+def _executor_with_history(entry: Mapping[str, Any] | None, **overrides: Any) -> Any:
+    client = _client()
+    if entry is not None:
+        client.history["01ef-abc"] = entry
+    return DatabricksExecutor(client=client, collect_pruning=True, **overrides), client
+
+
+async def test_a_traced_query_records_the_pruning_the_warehouse_measured() -> None:
+    executor, client = _executor_with_history(
+        {
+            "query_id": "01ef-abc",
+            "is_final": True,
+            "metrics": {"read_files_count": 3, "pruned_files_count": 37},
+        }
+    )
+
+    emitted = await executor.run("SELECT 1")
+
+    assert emitted.files_read == 3
+    assert emitted.files_pruned == 37
+    assert emitted.statement_id == "01ef-abc"
+    assert client.history_lookups == ["01ef-abc"]
+
+
+async def test_pruning_is_not_collected_unless_the_run_asked_for_it() -> None:
+    client = _client()
+    client.history["01ef-abc"] = {
+        "query_id": "01ef-abc",
+        "metrics": {"read_files_count": 3, "pruned_files_count": 37},
+    }
+
+    emitted = await DatabricksExecutor(client=client).run("SELECT 1")
+
+    assert emitted.files_read is None
+    assert client.history_lookups == []  # one API call per query is not free
+
+
+async def test_a_cache_hit_records_no_pruning_rather_than_a_perfect_one() -> None:
+    # every counter is zero on a cached answer; recorded naively that reads as
+    # "read 0 files of 0", which a ratio turns into flawless data skipping
+    executor, _ = _executor_with_history(
+        {
+            "query_id": "01ef-abc",
+            "metrics": {
+                "read_files_count": 0,
+                "pruned_files_count": 0,
+                "result_from_cache": True,
+            },
+        }
+    )
+
+    emitted = await executor.run("SELECT 1")
+
+    assert emitted.files_read is None
+    assert emitted.files_pruned is None
+
+
+async def test_a_metadata_only_answer_records_no_pruning_either() -> None:
+    # SELECT count(*) is served from the Delta log; no file is opened and none
+    # is pruned, so there is nothing to report
+    executor, _ = _executor_with_history(
+        {
+            "query_id": "01ef-abc",
+            "metrics": {"read_files_count": 0, "result_from_cache": False},
+        }
+    )
+
+    emitted = await executor.run("SELECT count(*) FROM samples.tpch.region")
+
+    assert emitted.files_read is None
+
+
+async def test_a_statement_the_history_never_recorded_leaves_the_trace_silent() -> None:
+    executor, _ = _executor_with_history(None)
+
+    emitted = await executor.run("SELECT 1")
+
+    assert emitted.files_read is None
+    assert emitted.files_pruned is None
+
+
+async def test_an_entry_without_a_metrics_section_leaves_the_trace_silent() -> None:
+    executor, _ = _executor_with_history({"query_id": "01ef-abc", "is_final": True})
+
+    assert (await executor.run("SELECT 1")).files_read is None
+
+
+async def test_an_unreadable_file_count_is_unknown_rather_than_zero() -> None:
+    executor, _ = _executor_with_history(
+        {
+            "query_id": "01ef-abc",
+            "metrics": {"read_files_count": "many", "pruned_files_count": "7"},
+        }
+    )
+
+    emitted = await executor.run("SELECT 1")
+
+    assert emitted.files_read is None
+    assert emitted.files_pruned == 7
+
+
+async def test_a_statement_with_no_id_cannot_be_attributed_so_it_is_not_looked_up() -> None:
+    client = _client(**{"SELECT 1": FakeResult(statement_id=None)})
+    executor = DatabricksExecutor(client=client, collect_pruning=True)
+
+    emitted = await executor.run("SELECT 1")
+
+    assert emitted.files_read is None
+    assert client.history_lookups == []
+
+
+async def test_the_history_client_looks_up_by_statement_id() -> None:
+    history = _History(_Entry({"query_id": "sid-1", "metrics": {"read_files_count": 2}}))
+    client = StatementExecutionClient(
+        api=_Api(_response()),
+        warehouse_id="abc123",
+        catalog="samples",
+        schema="tpch",
+        parameter=_parameter,
+        history=history,
+        query_filter=_filter,
+    )
+
+    found = await client.query_info("sid-1")
+
+    assert found is not None
+    assert found["metrics"]["read_files_count"] == 2
+    assert history.calls[0]["filter_by"].statement_ids == ["sid-1"]
+    assert history.calls[0]["include_metrics"] is True
+
+
+async def test_a_history_client_without_the_api_reports_nothing() -> None:
+    client = StatementExecutionClient(
+        api=_Api(_response()),
+        warehouse_id="abc123",
+        catalog="samples",
+        schema="tpch",
+        parameter=_parameter,
+    )
+
+    assert await client.query_info("sid-1") is None
+    assert await client.query_info("") is None
+
+
+async def test_a_history_entry_the_sdk_cannot_render_as_a_mapping_is_skipped() -> None:
+    client = StatementExecutionClient(
+        api=_Api(_response()),
+        warehouse_id="abc123",
+        catalog="samples",
+        schema="tpch",
+        parameter=_parameter,
+        history=_History(object()),
+        query_filter=_filter,
+    )
+
+    assert await client.query_info("sid-1") is None

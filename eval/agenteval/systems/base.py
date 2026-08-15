@@ -58,6 +58,21 @@ class EmittedQuery:
     duration_ms: int | None = None
     rows_read: int | None = None
     bytes_read: int | None = None
+    statement_id: str | None = None
+    """The engine's own id for this execution, where it issues one.
+
+    Databricks does, and it is what joins a number in this trace to the
+    warehouse's own record without any string matching. ``None`` on ClickHouse,
+    which attributes through ``log_comment`` instead."""
+
+    files_read: int | None = None
+    files_pruned: int | None = None
+    """Measured file pruning, when the engine reported it after execution.
+
+    Databricks only: its ``EXPLAIN`` carries no file counts at all, so unlike
+    ClickHouse's granule numbers this cannot be known before the query runs. Both
+    stay ``None`` when the result cache answered or when the statement opened no
+    file — a zero here would read as "pruned everything" (SPEC §8.2)."""
 
 
 @dataclass(frozen=True, slots=True)

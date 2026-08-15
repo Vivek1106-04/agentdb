@@ -49,6 +49,9 @@ class FakeClient:
     responses: dict[str, FakeResult] = field(default_factory=dict)
     failure: Exception | None = None
     calls: list[tuple[str, Mapping[str, Any], dict[str, Any]]] = field(default_factory=list)
+    history: dict[str, Mapping[str, Any]] = field(default_factory=dict)
+    history_failure: Exception | None = None
+    history_lookups: list[str] = field(default_factory=list)
 
     async def statement(
         self,
@@ -72,6 +75,12 @@ class FakeClient:
             if fragment in sql:
                 return response
         return FakeResult()
+
+    async def query_info(self, statement_id: str) -> Mapping[str, Any] | None:
+        self.history_lookups.append(statement_id)
+        if self.history_failure is not None:
+            raise self.history_failure
+        return self.history.get(statement_id)
 
     def statements(self) -> list[str]:
         return [sql for sql, _, _ in self.calls]
@@ -647,3 +656,52 @@ async def test_an_explain_that_returned_an_analysis_error_is_raised_not_returned
         await _adapter(client).explain(
             "SELECT nope FROM samples.tpch.lineitem", ExplainMode.ESTIMATE
         )
+
+
+# -- measured metrics --------------------------------------------------------
+#
+# Databricks EXPLAIN carries no file counts at all on a Photon plan, so this is
+# the only path by which the adapter ever learns whether data skipping fired.
+
+
+async def test_query_metrics_reads_what_the_warehouse_measured() -> None:
+    client = _client()
+    client.history["01f1-abc"] = {
+        "query_id": "01f1-abc",
+        "is_final": True,
+        "metrics": {
+            "read_files_count": 3,
+            "pruned_files_count": 37,
+            "read_bytes": 1_000,
+            "read_files_bytes": 10_000,
+            "result_from_cache": False,
+        },
+    }
+
+    measured = await _adapter(client).query_metrics("01f1-abc")
+
+    assert measured is not None
+    assert measured.files_read == 3
+    assert measured.pruning_ratio == 0.075
+    assert client.history_lookups == ["01f1-abc"]
+
+
+async def test_a_statement_the_history_never_recorded_measures_nothing() -> None:
+    client = _client()
+
+    assert await _adapter(client).query_metrics("01f1-missing") is None
+
+
+async def test_a_history_lookup_failure_is_an_adapter_error_not_a_stack_trace() -> None:
+    client = _client()
+    client.history_failure = RuntimeError("PERMISSION_DENIED: query history")
+
+    with pytest.raises(Exception, match="PERMISSION_DENIED"):
+        await _adapter(client).query_metrics("01f1-abc")
+
+
+async def test_query_metrics_needs_the_capability_that_declares_it() -> None:
+    adapter = _adapter(capabilities=frozenset())
+
+    with pytest.raises(UnsupportedCapabilityError):
+        await adapter.query_metrics("01f1-abc")

@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 from uuid import uuid4
 
+from agentdb.adapters import databricks_metrics as dbx_metrics
 from agentdb.adapters import databricks_sql as dbx
 from agentdb.adapters.base import BaseAdapter, Capability, QuerySemanticError
 from agentdb.adapters.errors import databricks_error
@@ -42,6 +43,7 @@ from agentdb.adapters.models import (
     ExplainMode,
     Limits,
     PhysicalLayout,
+    QueryMetrics,
     RawPlan,
     Relation,
     RelationDetail,
@@ -141,6 +143,14 @@ class DatabricksClient(Protocol):
         byte_limit: int | None = None,
         timeout_s: int | None = None,
     ) -> StatementResult: ...
+
+    async def query_info(self, statement_id: str) -> Mapping[str, Any] | None:
+        """The query-history entry for ``statement_id``, or ``None`` if there is none.
+
+        Separate from :meth:`statement` because it is a different API — the
+        history endpoint, not the SQL endpoint — and because the measured metrics
+        it carries are the only file-pruning evidence Databricks ever produces.
+        """
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,6 +403,26 @@ class DatabricksAdapter(BaseAdapter):
             bytes_read=result.bytes_read,
             query_id=result.statement_id,
         )
+
+    async def query_metrics(self, statement_id: str) -> QueryMetrics | None:
+        """What the warehouse measured while running ``statement_id`` (SPEC §8.2).
+
+        This is where Databricks pruning evidence lives, and the only place. The
+        estimate plan carries none — a Photon scan prints no file counts at all —
+        so a caller wanting to know whether data skipping fired has to execute
+        first and ask afterwards.
+
+        ``None`` means the history had nothing to say, which is deliberately not
+        the same as zero: a statement served from the result cache, and one
+        answered from Delta metadata alone, both truthfully read no files, and
+        neither pruned anything.
+        """
+        self.require(Capability.POST_HOC_PLAN_METRICS)
+        try:
+            entry = await self.client.query_info(statement_id)
+        except Exception as exc:
+            raise databricks_error(str(exc)) from exc
+        return dbx_metrics.from_query_info(entry)
 
     async def workload(self, window: TimeWindow, top_n: int) -> list[WorkloadEntry]:
         """The costliest statements in ``window``, from the warehouse's own history.

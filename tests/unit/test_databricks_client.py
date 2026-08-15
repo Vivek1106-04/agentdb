@@ -186,9 +186,9 @@ async def test_building_a_client_without_the_sdk_says_what_to_install() -> None:
 
 
 async def test_building_a_client_wires_the_statement_execution_api() -> None:
-    workspace = SimpleNamespace(statement_execution=_Api(_response()))
+    workspace = SimpleNamespace(statement_execution=_Api(_response()), query_history=_History())
     sdk = SimpleNamespace(WorkspaceClient=lambda **kwargs: workspace)
-    parameters = SimpleNamespace(StatementParameterListItem=_parameter)
+    parameters = SimpleNamespace(StatementParameterListItem=_parameter, QueryFilter=_filter)
 
     def importer(name: str) -> ModuleType:
         return cast(ModuleType, parameters if name == PARAMETER_MODULE else sdk)
@@ -260,9 +260,9 @@ async def test_parameters_are_built_with_the_api_type_not_plain_dicts() -> None:
 
 
 async def test_the_built_client_uses_the_sdks_parameter_type() -> None:
-    workspace = SimpleNamespace(statement_execution=_Api(_response()))
+    workspace = SimpleNamespace(statement_execution=_Api(_response()), query_history=_History())
     sdk = SimpleNamespace(WorkspaceClient=lambda **kwargs: workspace)
-    parameter_module = SimpleNamespace(StatementParameterListItem=_parameter)
+    parameter_module = SimpleNamespace(StatementParameterListItem=_parameter, QueryFilter=_filter)
 
     def importer(name: str) -> ModuleType:
         module = parameter_module if name == PARAMETER_MODULE else sdk
@@ -272,3 +272,126 @@ async def test_the_built_client_uses_the_sdks_parameter_type() -> None:
 
     assert isinstance(client, StatementExecutionClient)
     assert client.parameter is _parameter
+
+
+# -- measured metrics --------------------------------------------------------
+#
+# The only source of file-pruning evidence Databricks has. Two facts, both
+# measured on a Free Edition workspace, decide the shape of this code:
+#
+#   * the Query History API answered by statement id with is_final=True at t+0s;
+#   * system.query.history, the system table spelling of the same data, was
+#     1,514 to 23,290 seconds behind the warehouse clock, so it is not used.
+
+
+def _filter(*, statement_ids: list[str]) -> SimpleNamespace:
+    """Stand-in for the SDK's typed ``QueryFilter``."""
+    return SimpleNamespace(statement_ids=statement_ids)
+
+
+class _Entry:
+    """A history entry, which the SDK hands back as an object with ``as_dict``."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def as_dict(self) -> dict[str, Any]:
+        return self._payload
+
+
+class _History:
+    """A scripted query-history API."""
+
+    def __init__(self, *pages: list[Any]) -> None:
+        self.pages = list(pages) or [[]]
+        self.calls: list[Any] = []
+
+    def list(self, **kwargs: Any) -> SimpleNamespace:
+        self.calls.append(kwargs)
+        page = self.pages[min(len(self.calls) - 1, len(self.pages) - 1)]
+        return SimpleNamespace(res=page)
+
+
+def _metrics_client(history: _History, **overrides: Any) -> StatementExecutionClient:
+    return StatementExecutionClient(
+        api=_Api(_response()),
+        warehouse_id="abc123",
+        catalog="samples",
+        schema="tpch",
+        parameter=_parameter,
+        history=history,
+        query_filter=_filter,
+        metrics_poll_seconds=0.0,
+        **overrides,
+    )
+
+
+async def test_metrics_are_looked_up_by_statement_id_not_by_string_matching() -> None:
+    entry = {"query_id": "01f1-abc", "is_final": True, "metrics": {"read_files_count": 4}}
+    history = _History([_Entry(entry)])
+
+    found = await _metrics_client(history).query_info("01f1-abc")
+
+    assert found == entry
+    assert history.calls[0]["filter_by"].statement_ids == ["01f1-abc"]
+    assert history.calls[0]["include_metrics"] is True
+
+
+async def test_a_statement_still_running_is_polled_until_the_entry_is_final() -> None:
+    running = {"query_id": "01f1-abc", "is_final": False, "metrics": {}}
+    done = {"query_id": "01f1-abc", "is_final": True, "metrics": {"read_files_count": 4}}
+    history = _History([_Entry(running)], [_Entry(done)])
+
+    found = await _metrics_client(history).query_info("01f1-abc")
+
+    assert found == done
+    assert len(history.calls) == 2
+
+
+async def test_a_statement_that_never_finalizes_reports_nothing_rather_than_hanging() -> None:
+    running = {"query_id": "01f1-abc", "is_final": False}
+    history = _History([_Entry(running)])
+
+    assert await _metrics_client(history, metrics_attempts=2).query_info("01f1-abc") is None
+    assert len(history.calls) == 2
+
+
+async def test_an_empty_statement_id_is_not_looked_up() -> None:
+    history = _History()
+
+    assert await _metrics_client(history).query_info("") is None
+    assert history.calls == []
+
+
+async def test_a_client_built_without_the_history_api_measures_nothing() -> None:
+    client = StatementExecutionClient(
+        api=_Api(_response()),
+        warehouse_id="abc123",
+        catalog="samples",
+        schema="tpch",
+        parameter=_parameter,
+    )
+
+    assert await client.query_info("01f1-abc") is None
+
+
+async def test_an_entry_the_sdk_cannot_render_as_a_mapping_is_skipped() -> None:
+    history = _History([object()])
+
+    assert await _metrics_client(history, metrics_attempts=1).query_info("01f1-abc") is None
+
+
+async def test_the_built_client_wires_the_query_history_api() -> None:
+    history = _History()
+    workspace = SimpleNamespace(statement_execution=_Api(_response()), query_history=history)
+    sdk = SimpleNamespace(WorkspaceClient=lambda **kwargs: workspace)
+    service = SimpleNamespace(StatementParameterListItem=_parameter, QueryFilter=_filter)
+
+    def importer(name: str) -> ModuleType:
+        return cast(ModuleType, service if name == PARAMETER_MODULE else sdk)
+
+    client = await build_client(DatabricksTarget.from_env(ENV), importer=importer)
+
+    assert isinstance(client, StatementExecutionClient)
+    assert client.history is history
+    assert client.query_filter is _filter

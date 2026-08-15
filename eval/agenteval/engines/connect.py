@@ -187,6 +187,35 @@ class StatementExecutionClient:
     dict fails inside the SDK with ``'dict' object has no attribute 'as_dict'``,
     which is a failure worth catching in a unit test rather than in a bench run."""
 
+    history: Any = None
+    """The query-history API, the only source of measured pruning on Databricks.
+    ``None`` on a client built for execution alone."""
+
+    query_filter: Callable[..., Any] = dict
+    """Builds the history filter by keyword, for the same reason as
+    :attr:`parameter`: it is a typed SDK object, not a dict."""
+
+    async def query_info(self, statement_id: str) -> Mapping[str, Any] | None:
+        """The warehouse's record of one execution, looked up by primary key.
+
+        Not ``system.query.history``: that table was measured 1,514 to 23,290
+        seconds behind the warehouse clock on a Free Edition workspace, so a
+        benchmark joining to it would attribute nothing. The history *API*
+        answered by statement id immediately on every live probe.
+        """
+        if not statement_id or self.history is None:
+            return None
+        response = self.history.list(
+            filter_by=self.query_filter(statement_ids=[statement_id]),
+            include_metrics=True,
+            max_results=1,
+        )
+        for entry in getattr(response, "res", None) or ():
+            payload = entry.as_dict() if hasattr(entry, "as_dict") else None
+            if isinstance(payload, Mapping):
+                return payload
+        return None
+
     async def statement(
         self,
         sql: str,
@@ -258,11 +287,14 @@ async def build_databricks_client(
             f"cannot reach the Databricks workspace at {target.host}: {exc}"
         ) from exc
 
+    service = importer(DBX_PARAMETER_MODULE)
     client: DatabricksClient = StatementExecutionClient(
         api=workspace.statement_execution,
         warehouse_id=target.warehouse_id,
         catalog=target.catalog,
         schema=target.schema,
-        parameter=importer(DBX_PARAMETER_MODULE).StatementParameterListItem,
+        parameter=service.StatementParameterListItem,
+        history=workspace.query_history,
+        query_filter=service.QueryFilter,
     )
     return client

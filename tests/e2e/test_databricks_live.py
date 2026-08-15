@@ -23,13 +23,14 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from uuid import uuid4
 
 import pytest
 
 from agentdb.adapters.base import AdapterError, EngineConnectionError
 from agentdb.adapters.databricks import DatabricksAdapter
 from agentdb.adapters.databricks_client import DatabricksTarget, build_client
-from agentdb.adapters.models import ExplainMode, RelationRef, SamplePolicy
+from agentdb.adapters.models import ExplainMode, Limits, RelationRef, SamplePolicy
 from agentdb.config import Config
 from agentdb.core.explain import PlanExplainer
 from agentdb.core.plan_analyzer_databricks import parse_plan
@@ -46,6 +47,9 @@ FROM {CATALOG}.{SCHEMA}.lineitem
 WHERE l_shipdate >= DATE '1995-01-01'
 GROUP BY l_returnflag
 """.strip()
+
+LIMITS = Limits(timeout_s=60, max_result_rows=1_000)
+"""Room for a serverless warehouse that may be cold (SPEC §8.2 footgun 6)."""
 
 
 def _missing() -> list[str]:
@@ -161,3 +165,67 @@ async def test_a_rejected_query_is_classified_not_raised_as_a_connection_failure
 
     # the warehouse answered, so this must not look like a dead socket
     assert not isinstance(caught.value, EngineConnectionError)
+
+
+# -- measured metrics --------------------------------------------------------
+
+
+async def test_measured_metrics_supply_the_pruning_evidence_explain_does_not(
+    adapter: DatabricksAdapter,
+) -> None:
+    """The whole reason this path exists.
+
+    A Photon plan carries no file counts at all, so on Databricks the estimate
+    plan cannot say what fraction of a table a query read. The warehouse can, but
+    only afterwards.
+    """
+    # the nonce goes in a predicate, not a comment: a comment does not defeat the
+    # result cache, and a cached answer reports every counter as zero
+    nonce = int(uuid4().hex[:4], 16) % 97
+    sql = PROBE_SQL.replace(
+        "WHERE l_shipdate >= DATE '1995-01-01'",
+        f"WHERE l_shipdate >= DATE '1995-01-01' AND l_orderkey >= {nonce}",
+    )
+    result = await adapter.execute(sql, LIMITS)
+    assert result.query_id is not None
+
+    measured = await adapter.query_metrics(result.query_id)
+
+    assert measured is not None
+    assert measured.measured is True
+    assert measured.files_read is not None and measured.files_read > 0
+    assert measured.pruning_ratio is not None
+    assert measured.source == "query_history_api"
+
+
+async def test_a_statement_id_the_warehouse_never_saw_measures_nothing(
+    adapter: DatabricksAdapter,
+) -> None:
+    # well-formed but never issued. A *malformed* id is rejected by the API with
+    # "has an invalid length of 32" rather than reported as missing, which is the
+    # right behaviour — that is a bug in the caller, not an unmeasured statement.
+    assert await adapter.query_metrics("01f19800-0000-0000-0000-000000000000") is None
+
+
+async def test_the_system_table_is_too_far_behind_to_attribute_a_live_statement(
+    adapter: DatabricksAdapter,
+) -> None:
+    """Why the Query History API is used instead of ``system.query.history``.
+
+    SPEC §8.2 names the system table as the workload source, and it is the right
+    one for mining last week. It is not a source of attribution for the statement
+    that just ran: measured 1,514 and 23,290 seconds behind the warehouse clock
+    on two runs. This asserts the *reason*, so that if the lag ever closes the
+    failure is a prompt to simplify rather than a silent missed opportunity.
+    """
+    lag = await adapter.execute(
+        "SELECT timestampdiff(SECOND, max(start_time), current_timestamp()) AS lag_seconds "
+        "FROM system.query.history",
+        LIMITS,
+    )
+    seconds = int(str(lag.rows[0][0]))
+
+    assert seconds > 60, (
+        f"system.query.history is only {seconds}s behind; it may now be usable for "
+        "inline attribution, which would remove the need for the history API"
+    )

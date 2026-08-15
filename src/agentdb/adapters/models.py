@@ -353,6 +353,134 @@ class ResultSet:
                 )
 
 
+MetricsSource = Literal["query_history_api", "workload_log"]
+"""Where a :class:`QueryMetrics` came from.
+
+Both exist on Databricks and they are not interchangeable. The Query History API
+answers by ``statement_id`` immediately; ``system.query.history`` was measured
+lagging between **1,514 and 23,290 seconds** behind the warehouse clock across
+two runs on a Free Edition workspace — fine for mining yesterday's workload,
+useless for attributing the statement a benchmark just ran.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class QueryMetrics:
+    """What an engine measured while running one statement (SPEC §6, §8.2).
+
+    The counterpart to :class:`RawPlan`, and the more truthful of the two on
+    Databricks: ``EXPLAIN`` there is estimate-only and its Photon plans carry no
+    file counts at all, so **this is the only place file-pruning evidence exists**.
+
+    Every field is ``None`` when the engine did not report it. That matters more
+    here than anywhere else in this module, because three separate situations
+    make a warehouse report ``read_files_count = 0`` while the query succeeded:
+
+    * the **result cache** answered it, so no data was read at all;
+    * the answer came from Delta **metadata** — ``count(*)`` needs no file;
+    * the warehouse simply did not report metrics for that statement.
+
+    Read naively, each of those says "read no files", which a pruning ratio turns
+    into "pruned everything, perfectly". :attr:`measured` exists to stop that.
+    """
+
+    statement_id: str
+    engine: Engine
+    source: MetricsSource
+
+    from_result_cache: bool | None = None
+    """Whether the result cache answered. When true, nothing below measures data access."""
+
+    files_read: int | None = None
+    files_pruned: int | None = None
+    """Files data skipping eliminated before reading. The pruning numerator's partner."""
+
+    partitions_read: int | None = None
+    rows_read: int | None = None
+    rows_produced: int | None = None
+    bytes_read: int | None = None
+    bytes_in_files_read: int | None = None
+    """Total size of the files opened, against which :attr:`bytes_read` is the part
+    actually fetched. Their ratio is column projection and in-file skipping
+    together — a different mechanism from file pruning, so never merged with it."""
+
+    bytes_pruned: int | None = None
+    photon_time_ms: float | None = None
+    execution_time_ms: float | None = None
+    compilation_time_ms: float | None = None
+    total_time_ms: float | None = None
+    spill_bytes: int | None = None
+
+    @property
+    def measured(self) -> bool:
+        """Whether these numbers describe this statement reading data.
+
+        False for a cache hit and for a statement that reported no file access,
+        because a ratio computed from either is an artefact rather than a result.
+        """
+        if self.from_result_cache:
+            return False
+        return bool(self.files_read) or bool(self.files_pruned)
+
+    @property
+    def files_considered(self) -> int | None:
+        """Files the scan started from: read plus pruned."""
+        if not self.measured or self.files_read is None:
+            return None
+        return self.files_read + (self.files_pruned or 0)
+
+    @property
+    def pruning_ratio(self) -> float | None:
+        """Files read over files considered, or ``None`` when unmeasured.
+
+        Low is good. ``1.0`` means data skipping eliminated nothing — the common
+        case on an unclustered table, and a true statement about it rather than a
+        missing measurement.
+        """
+        considered = self.files_considered
+        if not considered or self.files_read is None:
+            return None
+        return self.files_read / considered
+
+    @property
+    def bytes_ratio(self) -> float | None:
+        """Bytes fetched over bytes in the files opened.
+
+        Measured at 0.07 on a TPC-H aggregate that read all ten files: columnar
+        projection and row-group skipping threw away 93% of what file pruning
+        could not. Reported beside :attr:`pruning_ratio`, never instead of it.
+        """
+        if not self.measured or not self.bytes_in_files_read or self.bytes_read is None:
+            return None
+        return self.bytes_read / self.bytes_in_files_read
+
+    def render(self) -> str:
+        """One short block for an agent's context, or for a trace."""
+        if self.from_result_cache:
+            return "Measured: the result cache answered; no data was read."
+        if not self.measured:
+            return "Measured: the engine reported no file access for this statement."
+        lines = [f"Measured (engine metrics, statement {self.statement_id}):"]
+        ratio = self.pruning_ratio
+        if ratio is not None:
+            considered = self.files_considered
+            lines.append(
+                f"- files read after pruning: {ratio:.1%} "
+                f"({self.files_read} of {considered} considered)"
+            )
+        byte_ratio = self.bytes_ratio
+        if byte_ratio is not None:
+            lines.append(
+                f"- bytes fetched from those files: {byte_ratio:.1%} "
+                "(column projection and in-file skipping, not file pruning)"
+            )
+        if self.rows_read is not None:
+            lines.append(f"- rows read: {self.rows_read:,}")
+        if self.photon_time_ms is not None:
+            lines.append(f"- Photon time: {self.photon_time_ms:,.0f} ms")
+        return "\n".join(lines)
+
+
 @dataclass(frozen=True, slots=True)
 class WorkloadEntry:
     """One normalized query shape mined from the engine's own log (SPEC §8)."""

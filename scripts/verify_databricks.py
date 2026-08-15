@@ -38,6 +38,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from agentdb.adapters.databricks import DatabricksAdapter, DatabricksClient
 from agentdb.adapters.databricks_client import DatabricksTarget, build_client
@@ -228,6 +229,88 @@ async def check_query_history(client: DatabricksClient) -> Outcome:
     return Outcome("system.query.history", not missing, detail)
 
 
+async def check_history_lag(client: DatabricksClient) -> Outcome:
+    """How far ``system.query.history`` trails the warehouse clock.
+
+    Measured, not assumed, because the answer decides an architectural choice. If
+    the system table were near-real-time it would be the obvious place to read
+    measured pruning from — it is SQL, it needs no second API, and SPEC §8.2
+    names it. It ran **1,514 to 23,290 seconds** behind across two measurements,
+    so the adapter reads the Query History API instead, and this check exists to
+    notice if that ever stops being true.
+    """
+    sql = (
+        "SELECT timestampdiff(SECOND, max(start_time), current_timestamp()) AS lag_seconds, "
+        "count(*) AS rows_in_history FROM system.query.history"
+    )
+    try:
+        columns, rows = await raw(client, sql)
+    except Exception as exc:
+        return Outcome("system.query.history lag", False, f"{type(exc).__name__}: {exc}")
+    if not rows:
+        return Outcome("system.query.history lag", False, "history is empty")
+    entry = dict(zip(columns, rows[0], strict=False))
+    lag = int(entry.get("lag_seconds") or 0)
+    write_fixture("query_history_lag.json", json.dumps(entry, default=str))
+    return Outcome(
+        "system.query.history lag",
+        True,
+        f"{lag}s behind the warehouse clock ({entry.get('rows_in_history')} rows)\n"
+        + (
+            "  usable for inline attribution"
+            if lag < 60
+            else "  too far behind for inline attribution; the Query History API is used instead"
+        ),
+    )
+
+
+async def check_measured_metrics(adapter: DatabricksAdapter, client: DatabricksClient) -> Outcome:
+    """The only source of file-pruning evidence Databricks has.
+
+    Runs a real aggregate, then asks the warehouse what it measured.
+
+    The nonce goes into a **predicate**, not a comment. A comment does not defeat
+    the Databricks result cache — this check first carried its nonce as a trailing
+    ``-- {hex}`` and the second run came back ``result_from_cache: true`` with
+    every counter at zero, which is exactly the shape of a measurement that means
+    nothing. Comments are evidently normalized out of the cache key; a predicate
+    that changes the statement's meaning is not.
+    """
+    nonce = int(uuid4().hex[:4], 16) % 97
+    sql = PROBE_SQL.replace(
+        "WHERE l_shipdate >= DATE '1995-01-01'",
+        f"WHERE l_shipdate >= DATE '1995-01-01' AND l_orderkey >= {nonce}",
+    )
+    try:
+        result = await client.statement(sql, parameters={})
+        measured = await adapter.query_metrics(result.statement_id or "")
+    except Exception as exc:
+        return Outcome("adapter.query_metrics", False, _failure(exc))
+
+    if measured is None:
+        return Outcome(
+            "adapter.query_metrics", False, "the query history reported nothing for the statement"
+        )
+    write_fixture(
+        "query_metrics.json",
+        json.dumps(
+            {
+                "statement_id": measured.statement_id,
+                "files_read": measured.files_read,
+                "files_pruned": measured.files_pruned,
+                "rows_read": measured.rows_read,
+                "bytes_read": measured.bytes_read,
+                "bytes_in_files_read": measured.bytes_in_files_read,
+                "from_result_cache": measured.from_result_cache,
+                "photon_time_ms": measured.photon_time_ms,
+            },
+            default=str,
+            indent=1,
+        ),
+    )
+    return Outcome("adapter.query_metrics", measured.measured, measured.render())
+
+
 async def check_explain(client: DatabricksClient) -> Outcome:
     """The plan text the parser is built against. This is the highest-risk fixture."""
     try:
@@ -392,9 +475,11 @@ async def main() -> int:
         await check_history(client),
         await check_information_schema(client),
         await check_query_history(client),
+        await check_history_lag(client),
         await check_explain(client),
         *await check_adapter(adapter),
         await check_explainer(adapter),
+        await check_measured_metrics(adapter, client),
     ]
     return report(outcomes)
 
