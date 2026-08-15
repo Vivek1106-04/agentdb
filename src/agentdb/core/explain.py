@@ -12,6 +12,7 @@ free.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from agentdb.adapters import (
@@ -19,11 +20,13 @@ from agentdb.adapters import (
     Capability,
     ColumnProfile,
     ExplainMode,
+    RawPlan,
     RelationRef,
     SamplePolicy,
 )
 from agentdb.config import Config
 from agentdb.core.plan_analyzer import summarize
+from agentdb.core.plan_analyzer_databricks import summarize as summarize_databricks
 from agentdb.core.plan_ir import PlanSummary
 from agentdb.core.plan_rules import RelationFacts, evaluate
 from agentdb.core.query_shape import QueryShape, analyze
@@ -39,29 +42,64 @@ class PlanExplainer:
     async def explain(self, sql: str, namespace: str) -> PlanSummary:
         """Plan ``sql`` and evaluate every rule its evidence supports.
 
-        Nothing here executes the query. On ClickHouse that is not a choice —
-        ``EXPLAIN`` cannot execute — and it is the property that makes this call
-        safe to offer an agent mid-loop.
+        Nothing here executes the query. Neither engine's ``EXPLAIN`` can — which
+        is what makes this call safe to offer an agent mid-loop, before the query
+        touches a hundred million rows.
+
+        Facts are gathered before the plan is summarized on Databricks, because
+        the plan reports how many files were *read* and the denominator lives in
+        ``DESCRIBE DETAIL``. A ratio without both numbers is not reported.
         """
         raw = await self.adapter.explain(sql, ExplainMode.ESTIMATE)
-        summary = summarize(raw)
         shape = analyze(sql, self.adapter.engine)
         facts = await self._facts(shape, namespace)
+        summary = self._summarize(raw, facts)
         return evaluate(summary, shape, facts, self.config)
 
+    def _summarize(self, raw: RawPlan, facts: Mapping[str, RelationFacts]) -> PlanSummary:
+        """Normalize the engine's plan output with the engine's own parser."""
+        if self.adapter.engine == "databricks":
+            return summarize_databricks(
+                raw,
+                files_total={
+                    relation: known.layout.num_files
+                    for relation, known in facts.items()
+                    if known.layout.num_files is not None
+                },
+            )
+        return summarize(raw)
+
     async def _facts(self, shape: QueryShape, namespace: str) -> dict[str, RelationFacts]:
-        """Layout, width and the profiles the rules can actually use."""
+        """Layout, width, ordinals and the profiles the rules can actually use."""
         facts: dict[str, RelationFacts] = {}
-        for table in shape.tables:
-            ref = RelationRef(namespace=namespace, name=table.rpartition(".")[2])
+        for table in shape.qualified_tables:
+            ref = self._ref(table, namespace)
             detail = await self.adapter.describe_relation(ref)
             layout = await self.adapter.physical_layout(ref)
             facts[table] = RelationFacts(
                 layout=layout,
                 column_count=len(detail.columns),
                 profiles=await self._profiles(ref, shape, detail.column_names),
+                column_ordinals={
+                    name: position for position, name in enumerate(detail.column_names, start=1)
+                },
             )
         return facts
+
+    def _ref(self, table: str, namespace: str) -> RelationRef:
+        """Build a reference the adapter can resolve, however the query wrote it.
+
+        On Databricks a catalog written into the query is kept: the agent may
+        have named a catalog other than the adapter's default, and silently
+        replacing it would explain a plan for a different table.
+        """
+        parts = table.split(".")
+        name = parts[-1]
+        if self.adapter.engine != "databricks":
+            return RelationRef(namespace=namespace, name=name)
+        catalog = parts[-3] if len(parts) >= 3 else None
+        schema = parts[-2] if len(parts) >= 2 else namespace
+        return RelationRef(catalog=catalog, namespace=schema, name=name)
 
     async def _profiles(
         self, ref: RelationRef, shape: QueryShape, columns: tuple[str, ...]

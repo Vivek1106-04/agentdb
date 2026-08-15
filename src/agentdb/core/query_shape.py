@@ -33,8 +33,15 @@ class QueryShape:
 
     parsed: bool
     tables: tuple[str, ...] = ()
-    """Relations referenced, in the order they appear — the left-to-right order a
-    join warning reasons about."""
+    """Relations referenced by bare name, in the order they appear — the
+    left-to-right order a join warning reasons about."""
+
+    qualified_tables: tuple[str, ...] = ()
+    """The same relations, as the query actually wrote them.
+
+    Kept alongside the bare names because under Unity Catalog the qualification
+    *is* the fact: ``FROM lineitem`` and ``FROM samples.tpch.lineitem`` name the
+    same table only if the session's ``USE`` context cooperates (SPEC §8.2)."""
 
     filter_columns: frozenset[str] = frozenset()
     """Columns constrained in ``WHERE`` or ``PREWHERE``, including inside functions."""
@@ -67,6 +74,7 @@ def analyze(sql: str, engine: str) -> QueryShape:
     return QueryShape(
         parsed=True,
         tables=_unique(table.name for table in tree.find_all(exp.Table)),
+        qualified_tables=_unique(_qualified(table) for table in tree.find_all(exp.Table)),
         filter_columns=frozenset(_filter_columns(tree)),
         group_by_columns=_group_by(tree),
         order_by_columns=_order_by(tree),
@@ -110,6 +118,40 @@ def _order_by(tree: exp.Expr) -> tuple[str, ...]:
     )
 
 
+def _qualified(table: exp.Table) -> str:
+    """A table reference with every name part the query supplied, and no more."""
+    return ".".join(part for part in (table.catalog, table.db, table.name) if part)
+
+
 def _unique(names: Iterable[str]) -> tuple[str, ...]:
     """Deduplicate while keeping first-appearance order — plans are read in order."""
     return tuple(dict.fromkeys(names))
+
+
+def identifiers_in(expression: str) -> frozenset[str]:
+    """The bare identifiers inside a key expression.
+
+    Key terms are expressions as often as columns — ``toYYYYMM(EventDate)`` on
+    ClickHouse, ``date_trunc('month', l_shipdate)`` on Databricks — so a rule
+    asking "does this filter touch the key" has to look inside the term rather
+    than compare strings. Deliberately lexical: a key expression comes from the
+    engine's own catalogue, and parsing it as SQL would fail on dialect-specific
+    forms that carry no extra information here.
+    """
+    token: list[str] = []
+    found: set[str] = set()
+    for char in expression:
+        if char.isalnum() or char == "_":
+            token.append(char)
+            continue
+        if token:
+            found.add("".join(token))
+            token = []
+    if token:
+        found.add("".join(token))
+    return frozenset(found)
+
+
+def mentions(key_expression: str, columns: frozenset[str]) -> bool:
+    """Whether any of ``columns`` appears inside ``key_expression``."""
+    return bool(columns & identifiers_in(key_expression))

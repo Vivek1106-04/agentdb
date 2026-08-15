@@ -203,5 +203,62 @@ def clickhouse_hits_fixture() -> FakeAdapter:
     )
 
 
+def databricks_tpch_fixture() -> FakeAdapter:
+    """A TPC-H-shaped Databricks adapter: one clustered Delta table.
+
+    Wide enough to matter: ``l_audit_note`` sits at ordinal 40, past the 32
+    columns Delta indexes by default, so a filter on it can skip no files — the
+    fact the Databricks rules exist to surface.
+    """
+    ref = RelationRef(catalog="samples", namespace="tpch", name="lineitem")
+    create = "CREATE TABLE samples.tpch.lineitem (...) USING delta CLUSTER BY (l_shipdate)"
+    columns = [
+        ColumnDef(name="l_orderkey", data_type="bigint", is_nullable=False),
+        ColumnDef(name="l_shipdate", data_type="date", is_nullable=False),
+    ]
+    columns.extend(
+        ColumnDef(name=f"l_filler_{index}", data_type="string", is_nullable=True)
+        for index in range(3, 40)
+    )
+    columns.append(ColumnDef(name="l_audit_note", data_type="string", is_nullable=True))
+
+    layout = PhysicalLayout(
+        engine="databricks",
+        ref=ref,
+        create_statement=create,
+        table_format="delta",
+        clustering_columns=("l_shipdate",),
+        stats_indexed_columns=32,
+        num_files=1_000,
+        avg_file_bytes=128 * 1024 * 1024,
+        approx_rows=6_001_215,
+        on_disk_bytes=128 * 1024 * 1024 * 1_000,
+        is_managed=True,
+    )
+    return FakeAdapter(
+        engine="databricks",
+        capabilities=DATABRICKS_CAPABILITIES,
+        relations=(
+            Relation(
+                ref=ref,
+                kind="table",
+                engine_type="DELTA",
+                approx_rows=6_001_215,
+                on_disk_bytes=128 * 1024 * 1024 * 1_000,
+            ),
+        ),
+        details={
+            str(ref): RelationDetail(ref=ref, columns=tuple(columns), create_statement=create)
+        },
+        layouts={str(ref): layout},
+        rules=DialectRules(
+            engine="databricks",
+            version="2026.30",
+            identifier_quote="`",
+            quirks=("Every table is catalog.schema.table.",),
+        ),
+    )
+
+
 _ADAPTER_PROTOCOL_CHECK: Adapter = FakeAdapter()
 """Import-time proof that the fake satisfies the protocol mypy checks against."""

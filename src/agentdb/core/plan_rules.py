@@ -17,8 +17,9 @@ from dataclasses import dataclass, field
 
 from agentdb.adapters import ColumnProfile, PhysicalLayout
 from agentdb.config import Config
+from agentdb.core import plan_rules_databricks as databricks
 from agentdb.core.plan_ir import PlanSummary, PlanWarning, Severity, WarningCode
-from agentdb.core.query_shape import QueryShape
+from agentdb.core.query_shape import QueryShape, mentions
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +29,9 @@ class RelationFacts:
     layout: PhysicalLayout
     column_count: int = 0
     profiles: Mapping[str, ColumnProfile] = field(default_factory=dict)
+    column_ordinals: Mapping[str, int] = field(default_factory=dict)
+    """1-based schema positions. Delta's statistics stop at an ordinal, so this is
+    what makes ``STATS_NOT_COLLECTED`` computable; ClickHouse ignores it."""
 
     @property
     def approx_rows(self) -> int | None:
@@ -49,7 +53,11 @@ def evaluate(
     warnings: list[PlanWarning] = []
     for relation, relation_facts in _relations_in_play(summary, shape, facts):
         warnings.extend(_relation_warnings(summary, shape, relation, relation_facts, config))
-    warnings.extend(_join_warnings(shape, facts))
+    if summary.engine == "databricks":
+        warnings.extend(databricks.query_warnings(shape))
+        warnings.extend(databricks.plan_warnings(summary, config))
+    else:
+        warnings.extend(_join_warnings(shape, facts))
     warnings.extend(_result_size_warnings(summary, shape, facts, config))
     return summary.with_warnings(tuple(warnings))
 
@@ -91,15 +99,23 @@ def _relation_warnings(
                 relation=relation,
                 human_message=(
                     f"the scan of {relation} pruned almost nothing: "
-                    f"{summary.pruning_ratio:.0%} of granules were read, over ~{rows:,} rows"
+                    f"{summary.pruning_ratio:.0%} of {summary.pruning_unit or 'unit'}s were "
+                    f"read, over ~{rows:,} rows"
                 ),
-                suggested_rewrite=_sort_key_hint(layout),
+                suggested_rewrite=_pruning_key_hint(layout),
             )
         )
 
-    warnings.extend(_sort_key_warnings(shape, relation, layout))
-    warnings.extend(_partition_warning(shape, relation, layout))
-    warnings.extend(_projection_warning(summary, shape, relation, layout))
+    if summary.engine == "databricks":
+        warnings.extend(
+            databricks.relation_warnings(
+                summary, shape, relation, layout, facts.column_ordinals, config
+            )
+        )
+    else:
+        warnings.extend(_sort_key_warnings(shape, relation, layout))
+        warnings.extend(_partition_warning(shape, relation, layout))
+        warnings.extend(_projection_warning(summary, shape, relation, layout))
     warnings.extend(_group_by_warnings(shape, relation, facts, config))
 
     wide = facts.column_count > config.wide_table_column_threshold
@@ -119,11 +135,18 @@ def _relation_warnings(
     return warnings
 
 
-def _sort_key_hint(layout: PhysicalLayout) -> str | None:
-    """The one rewrite that follows mechanically from a layout: filter the sort key."""
-    if not layout.order_by:
-        return None
-    return f"filter on {layout.order_by[0]}, the leading sort-key column, to prune granules"
+def _pruning_key_hint(layout: PhysicalLayout) -> str | None:
+    """The one rewrite that follows mechanically from a layout: filter the key.
+
+    Which key depends on the engine, and so does the unit it prunes: ClickHouse
+    prunes granules through the leading sort-key column, Delta prunes files
+    through the clustering key.
+    """
+    if layout.order_by:
+        return f"filter on {layout.order_by[0]}, the leading sort-key column, to prune granules"
+    if layout.clustering_columns:
+        return f"filter on {layout.clustering_columns[0]}, a clustering key column, to skip files"
+    return None
 
 
 def _sort_key_warnings(
@@ -139,10 +162,10 @@ def _sort_key_warnings(
         return []
 
     leading = layout.order_by[0]
-    if _mentions(leading, shape.filter_columns):
+    if mentions(leading, shape.filter_columns):
         return []
 
-    later = [column for column in layout.order_by[1:] if _mentions(column, shape.filter_columns)]
+    later = [column for column in layout.order_by[1:] if mentions(column, shape.filter_columns)]
     if later:
         return [
             PlanWarning(
@@ -179,7 +202,7 @@ def _partition_warning(
 ) -> list[PlanWarning]:
     if not shape.parsed or not layout.partition_by or not shape.filter_columns:
         return []
-    if any(_mentions(term, shape.filter_columns) for term in layout.partition_by):
+    if any(mentions(term, shape.filter_columns) for term in layout.partition_by):
         return []
     return [
         PlanWarning(
@@ -326,29 +349,3 @@ def _result_size_warnings(
 def _rows(table: str, facts: Mapping[str, RelationFacts]) -> int | None:
     known = facts.get(table) or facts.get(table.rpartition(".")[2])
     return known.approx_rows if known is not None else None
-
-
-def _mentions(key_expression: str, columns: frozenset[str]) -> bool:
-    """Whether a filtered column appears in a key term.
-
-    Key terms can be expressions — ``toYYYYMM(EventDate)`` is a partition key on
-    ``EventDate`` — so the test is on the identifiers inside the term rather than
-    on string equality, which is what the engine's own pruning follows.
-    """
-    return bool(columns & _identifiers(key_expression))
-
-
-def _identifiers(expression: str) -> frozenset[str]:
-    """The bare identifiers inside a key expression."""
-    token: list[str] = []
-    found: set[str] = set()
-    for char in expression:
-        if char.isalnum() or char == "_":
-            token.append(char)
-            continue
-        if token:
-            found.add("".join(token))
-            token = []
-    if token:
-        found.add("".join(token))
-    return frozenset(found)
