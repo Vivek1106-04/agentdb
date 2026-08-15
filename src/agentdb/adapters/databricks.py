@@ -266,7 +266,7 @@ class DatabricksAdapter(BaseAdapter):
             stats_columns=_stats_columns(
                 table_properties.get(dbx.DELTA_STATS_COLUMN_LIST_PROPERTY)
             ),
-            approx_rows=dbx.optional_int(row.get("numRows")),
+            approx_rows=_row_count(row),
             on_disk_bytes=size_bytes,
         )
 
@@ -354,11 +354,20 @@ class DatabricksAdapter(BaseAdapter):
             self.require(Capability.COST_ANNOTATED_PLAN)
         statement = dbx.explain_statement(sql, mode)
         result = await self._query(statement, {})
+        payload = "\n".join(str(row[0]) for row in result.rows)
+
+        # EXPLAIN over an invalid query *succeeds* and returns the analysis error
+        # where the plan should be. Raising here keeps a repairable semantic
+        # error from reaching the agent as an unparseable plan.
+        failure = dbx.explain_failure(payload)
+        if failure is not None:
+            raise databricks_error(failure)
+
         return RawPlan(
             engine=self.engine,
             mode=mode,
             sql=sql,
-            payload="\n".join(str(row[0]) for row in result.rows),
+            payload=payload,
             statements=(statement,),
         )
 
@@ -471,6 +480,22 @@ class DatabricksAdapter(BaseAdapter):
 
 def _ref_params(ref: RelationRef) -> dict[str, Any]:
     return {"catalog": ref.catalog, "schema": ref.namespace, "table": ref.name}
+
+
+def _row_count(row: Mapping[str, Any]) -> int | None:
+    """The relation's row count, if ``DESCRIBE DETAIL`` reported one.
+
+    Older runtimes print ``numRows``; current ones carry it inside a
+    ``statistics`` struct, which arrives empty on a table nobody has analyzed —
+    observed on ``samples.tpch``, where it is ``{}``. The honest answer is then
+    ``None``: a rule that needs a row count stays silent rather than firing on a
+    zero that means "not measured".
+    """
+    direct = dbx.optional_int(row.get("numRows"))
+    if direct is not None:
+        return direct
+    statistics = dbx.operation_parameters(row.get("statistics"))
+    return dbx.optional_int(statistics.get("numRows"))
 
 
 def _is_managed(table_type: object) -> bool | None:

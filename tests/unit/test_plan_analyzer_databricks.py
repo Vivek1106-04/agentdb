@@ -12,6 +12,8 @@ run. The key names are documented, not yet observed here.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from agentdb.adapters import RawPlan
@@ -300,3 +302,66 @@ def test_a_scan_the_plan_did_not_name_is_left_out_of_the_file_totals() -> None:
     summary = summarize(_raw(plan), files_total={"lineitem": 100})
 
     assert summary.pruning_ratio is None
+
+
+# --------------------------------------------------------------------------
+# pinned to observed output
+#
+# The fixture below was captured from a live Free Edition warehouse by
+# scripts/verify_databricks.py (DBSQL 2026.20). Everything above this line was
+# written from documentation; everything below is what the engine actually
+# printed, and the two disagreed in ways that mattered.
+# --------------------------------------------------------------------------
+
+LIVE_PLAN = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "databricks" / "explain_formatted.txt"
+)
+
+
+@pytest.fixture(scope="module")
+def live() -> RawPlan:
+    if not LIVE_PLAN.is_file():
+        pytest.skip(f"{LIVE_PLAN.name} not captured; run scripts/verify_databricks.py")
+    return _raw(LIVE_PLAN.read_text(encoding="utf-8"))
+
+
+def test_a_real_photon_plan_parses_into_a_tree(live: RawPlan) -> None:
+    root = parse_plan(live)
+
+    # every Databricks plan is wrapped in AdaptiveSparkPlan
+    assert root.node_type == "AdaptiveSparkPlan"
+    scans = [node for node in root.walk() if node.op is PlanOp.SCAN]
+    assert [scan.relation for scan in scans] == ["samples.tpch.lineitem"]
+
+
+def test_a_photon_scan_states_its_filters_under_databricks_own_spelling(
+    live: RawPlan,
+) -> None:
+    scan = next(node for node in parse_plan(live).walk() if node.op is PlanOp.SCAN)
+
+    # PhotonScan prints RequiredDataFilters and DictionaryFilters; it prints no
+    # PushedFilters line at all, which the documented parser read as "pushed
+    # nothing"
+    assert scan.pushed_filters == (
+        "isnotnull(l_shipdate)",
+        "(l_shipdate >= 1995-01-01)",
+    )
+    assert scan.data_filters == ("(l_shipdate >= 1995-01-01)",)
+
+
+def test_a_photon_plan_carries_no_file_counts_so_no_ratio_is_claimed(
+    live: RawPlan,
+) -> None:
+    # the plan says nothing about files; a denominator alone must not become 0%
+    summary = summarize(live, files_total={"samples.tpch.lineitem": 10})
+
+    assert summary.pruning_ratio is None
+    assert summary.pruning_unit is None
+    assert summary.full_scan_relations == ()
+
+
+def test_the_wrapper_node_does_not_count_as_a_photon_fallback(live: RawPlan) -> None:
+    summary = summarize(live)
+
+    # AdaptiveSparkPlan never carries the prefix; every operator below it does
+    assert summary.photon_coverage == 1.0

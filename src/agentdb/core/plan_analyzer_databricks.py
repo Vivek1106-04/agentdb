@@ -20,7 +20,7 @@ Two properties matter more than completeness:
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 from agentdb.adapters import RawPlan
@@ -57,6 +57,28 @@ Databricks states which side it decided to build."""
 
 PHOTON_PREFIX = "Photon"
 
+WRAPPER_NODES = frozenset({"AdaptiveSparkPlan"})
+"""Plan wrappers, not operators.
+
+``AdaptiveSparkPlan`` is the root every Databricks plan is wrapped in and it
+never carries a ``Photon`` prefix. Counting it as a fallback would report 93%
+Photon coverage on a plan that is entirely Photon — observed on the first live
+run."""
+
+PUSHED_FILTER_KEYS = ("PushedFilters", "RequiredDataFilters")
+"""Where a scan states the predicates it pushed into the read.
+
+Two spellings for one idea, and the second was learned the hard way: a
+non-Photon ``FileScan`` prints ``PushedFilters``, while ``PhotonScan`` prints
+``RequiredDataFilters`` and no ``PushedFilters`` line at all. A parser that knew
+only the documented spelling read every Photon plan as having pushed nothing."""
+
+DATA_FILTER_KEYS = ("DataFilters", "DictionaryFilters")
+"""Predicates evaluated below the file-skipping layer.
+
+``DictionaryFilters`` is Photon's parquet dictionary-level filtering: narrower
+than a statistics-based file skip, wider than a row scan."""
+
 
 class PlanParseError(ValueError):
     """The plan output could not be read.
@@ -86,8 +108,14 @@ def summarize(raw: RawPlan, *, files_total: Mapping[str, int] | None = None) -> 
     nodes = root.walk()
     scans = tuple(node for node in nodes if node.op is PlanOp.SCAN)
 
-    considered = sum(scan.files_total or 0 for scan in scans)
-    selected = sum(scan.files_selected or 0 for scan in scans if scan.files_total)
+    # Only scans that reported *both* numbers may contribute. Treating an
+    # unreported ``files_selected`` as zero is how a plan that measured nothing
+    # comes back claiming it pruned everything — observed on the first live run,
+    # where a Photon plan carries no file counts at all and the summary read
+    # "0.0% of files read after pruning".
+    measured = [scan for scan in scans if scan.files_total and scan.files_selected is not None]
+    considered = sum(scan.files_total or 0 for scan in measured)
+    selected = sum(scan.files_selected or 0 for scan in measured)
     ratio = selected / considered if considered else None
 
     return PlanSummary(
@@ -198,8 +226,8 @@ def _node(label: str, fields: Mapping[str, str], children: tuple[PlanNode, ...])
         filters=_bracket_list(fields.get("Condition") or fields.get("Filter")),
         files_selected=_count(fields.get("number of files read")),
         partition_filters=_bracket_list(fields.get("PartitionFilters")),
-        pushed_filters=_bracket_list(fields.get("PushedFilters")),
-        data_filters=_bracket_list(fields.get("DataFilters")),
+        pushed_filters=_first_list(fields, PUSHED_FILTER_KEYS),
+        data_filters=_first_list(fields, DATA_FILTER_KEYS),
         photon=label.strip().startswith(PHOTON_PREFIX),
         join_strategy=_join_strategy(label),
         children=children,
@@ -231,11 +259,20 @@ def _lookup(relation: str | None, files_total: Mapping[str, int]) -> int | None:
 
 
 def _photon_coverage(nodes: tuple[PlanNode, ...]) -> float | None:
-    """Fraction of plan nodes that ran on Photon, inferred from node names."""
-    known = [node for node in nodes if node.photon is not None]
-    if not known:
+    """Fraction of operator nodes that ran on Photon, inferred from node names.
+
+    Wrappers are excluded: ``AdaptiveSparkPlan`` is not an operator and never
+    carries the prefix, so counting it would report a fallback on a plan that is
+    entirely vectorized.
+    """
+    operators = [
+        node
+        for node in nodes
+        if node.photon is not None and _class_name(node.node_type) not in WRAPPER_NODES
+    ]
+    if not operators:
         return None
-    return sum(1 for node in known if node.photon) / len(known)
+    return sum(1 for node in operators if node.photon) / len(operators)
 
 
 def _total_bytes(scans: tuple[PlanNode, ...]) -> int | None:
@@ -270,6 +307,19 @@ def _join_strategy(label: str) -> str | None:
 
 def _class_name(label: str) -> str:
     return label.strip().split()[0] if label.strip() else ""
+
+
+def _first_list(fields: Mapping[str, str], keys: Sequence[str]) -> tuple[str, ...]:
+    """The first of ``keys`` this node actually printed.
+
+    Databricks spells the same idea differently per executor, and a scan states
+    one spelling or the other, never both.
+    """
+    for key in keys:
+        value = fields.get(key)
+        if value is not None:
+            return _bracket_list(value)
+    return ()
 
 
 def _bracket_list(value: str | None) -> tuple[str, ...]:

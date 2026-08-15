@@ -1,0 +1,1 @@
+{"columns": ["key", "value"], "rows": [["delta.dropFeatureTruncateHistory.retentionDuration", "0 hours"], ["delta.enableChangeDataFeed", "true"], ["delta.enableDeletionVectors", "false"], ["delta.feature.changeDataFeed", "supported"], ["delta.minReaderVersion", "1"], ["delta.minWriterVersion", "7"], ["delta.parquet.compression.codec", "zstd"]]}

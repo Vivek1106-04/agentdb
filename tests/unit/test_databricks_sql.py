@@ -203,3 +203,121 @@ def test_a_table_that_was_never_zordered_reports_no_zorder_columns(
     history: list[dict[str, object]],
 ) -> None:
     assert dbx.zorder_columns(history) is None
+
+
+# --------------------------------------------------------------------------
+# pinned to observed output (DBSQL 2026.20, Free Edition)
+# --------------------------------------------------------------------------
+
+
+def test_operation_parameters_arrive_as_a_json_string_from_the_api() -> None:
+    # the Statement Execution API returns this column as text, not as a map;
+    # treating it as a map made Z-ORDER mining find nothing on every table
+    raw = '{"partitionBy":"[]","clusterBy":"[]","zOrderBy":"[\\"l_partkey\\"]"}'
+
+    assert dbx.operation_parameters(raw) == {
+        "partitionBy": "[]",
+        "clusterBy": "[]",
+        "zOrderBy": '["l_partkey"]',
+    }
+
+
+def test_zorder_is_mined_from_the_json_string_form() -> None:
+    history = [
+        {
+            "operation": "OPTIMIZE",
+            "operationParameters": '{"zOrderBy":"[\\"l_partkey\\",\\"l_suppkey\\"]"}',
+        }
+    ]
+
+    assert dbx.zorder_columns(history) == ("l_partkey", "l_suppkey")
+
+
+@pytest.mark.parametrize("value", [None, "", "not json", "[1,2]", 7])
+def test_unreadable_operation_parameters_are_empty_rather_than_a_crash(value: object) -> None:
+    assert dbx.operation_parameters(value) == {}
+
+
+def test_a_real_describe_detail_row_is_read_by_name() -> None:
+    # observed columns, in the order the warehouse returned them
+    columns = (
+        "format",
+        "id",
+        "name",
+        "description",
+        "location",
+        "createdAt",
+        "lastModified",
+        "partitionColumns",
+        "clusteringColumns",
+        "numFiles",
+        "sizeInBytes",
+        "properties",
+        "minReaderVersion",
+        "minWriterVersion",
+        "tableFeatures",
+        "statistics",
+        "clusterByAuto",
+    )
+    row = (
+        "delta",
+        "c9864d67",
+        "samples.tpch.lineitem",
+        None,
+        "s3://bucket/tables/281c5907",
+        "2026-08-13T15:09:30.201Z",
+        "2026-08-13T15:09:43.000Z",
+        "[]",
+        "[]",
+        "10",
+        "753837113",
+        '{"delta.enableDeletionVectors":"false"}',
+        "1",
+        "7",
+        '["changeDataFeed"]',
+        "{}",
+        "false",
+    )
+
+    mapping = dbx.row_mapping(columns, row)
+
+    # counts arrive as strings and an empty clustering key is a measurement,
+    # not an absence of information
+    assert dbx.optional_int(mapping["numFiles"]) == 10
+    assert dbx.optional_int(mapping["sizeInBytes"]) == 753_837_113
+    assert dbx.string_tuple(mapping["clusteringColumns"]) == ()
+    assert dbx.string_tuple(mapping["partitionColumns"]) == ()
+    assert dbx.operation_parameters(mapping["statistics"]) == {}
+
+
+REAL_PLANNING_ERROR = """Error occurred during query planning:
+[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name
+`no_such_column` cannot be resolved. Did you mean one of the following? [`l_discount`,
+`l_shipdate`]. SQLSTATE: 42703; line 2 pos 25;
+'Project ['no_such_column]
++- SubqueryAlias samples.tpch.lineitem
+"""
+
+
+def test_an_explain_that_did_not_plan_is_recognised_as_a_failure() -> None:
+    # EXPLAIN over an invalid query succeeds and returns the error where the
+    # plan should be — observed live
+    assert dbx.explain_failure(REAL_PLANNING_ERROR) == REAL_PLANNING_ERROR.strip()
+
+
+def test_a_real_plan_is_not_mistaken_for_a_failure() -> None:
+    payload = "== Physical Plan ==\nPhotonScan parquet samples.tpch.lineitem (1)\n"
+
+    assert dbx.explain_failure(payload) is None
+
+
+def test_a_plan_that_merely_mentions_sqlstate_in_a_literal_is_still_a_plan() -> None:
+    payload = "== Physical Plan ==\nPhotonFilter (2)\nCondition: (msg = 'SQLSTATE: 42703')\n"
+
+    assert dbx.explain_failure(payload) is None
+
+
+def test_output_that_is_neither_a_plan_nor_a_named_error_is_left_alone() -> None:
+    # refusing to guess: an unrecognised payload reaches the parser, which
+    # raises with the text rather than this function inventing a classification
+    assert dbx.explain_failure("something unexpected") is None

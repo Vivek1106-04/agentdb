@@ -19,10 +19,12 @@ import pytest
 
 from agenteval.engines.clickhouse import SchemaError
 from agenteval.engines.connect import (
+    DBX_PARAMETER_MODULE,
     DatabricksTarget,
     EngineConnectionError,
     StatementExecutionClient,
     build_databricks_client,
+    normalize_host,
 )
 from agenteval.engines.databricks import DatabricksExecutor, DatabricksLimits
 from agenteval.engines.errors import databricks_error_class
@@ -227,6 +229,11 @@ def test_an_incomplete_configuration_refuses_to_start(missing: str) -> None:
         DatabricksTarget.from_env(env)
 
 
+def _parameter(*, name: str, value: str) -> SimpleNamespace:
+    """Stands in for the SDK's StatementParameterListItem."""
+    return SimpleNamespace(name=name, value=value)
+
+
 class _Api:
     def __init__(self, response: Any) -> None:
         self.response = response
@@ -254,7 +261,7 @@ def _response(**overrides: Any) -> SimpleNamespace:
 async def test_a_statement_returns_rows_and_the_id_that_makes_it_auditable() -> None:
     api = _Api(_response())
     client = StatementExecutionClient(
-        api=api, warehouse_id="abc123", catalog="samples", schema="tpch"
+        api=api, warehouse_id="abc123", catalog="samples", schema="tpch", parameter=_parameter
     )
 
     result = await client.statement("SELECT 1", parameters={"catalog": "samples"}, timeout_s=17)
@@ -262,7 +269,9 @@ async def test_a_statement_returns_rows_and_the_id_that_makes_it_auditable() -> 
     assert result.rows == ((1,),)
     assert result.columns == ("c",)
     assert result.statement_id == "01ef-abc"
-    assert api.calls[0]["parameters"] == [{"name": "catalog", "value": "samples"}]
+    assert [(item.name, item.value) for item in api.calls[0]["parameters"]] == [
+        ("catalog", "samples")
+    ]
     assert api.calls[0]["wait_timeout"] == "17s"
 
 
@@ -270,7 +279,7 @@ async def test_a_statement_returns_rows_and_the_id_that_makes_it_auditable() -> 
 async def test_the_synchronous_wait_is_clamped(timeout_s: int | None, expected: str) -> None:
     api = _Api(_response())
     client = StatementExecutionClient(
-        api=api, warehouse_id="abc123", catalog="samples", schema="tpch"
+        api=api, warehouse_id="abc123", catalog="samples", schema="tpch", parameter=_parameter
     )
 
     await client.statement("SELECT 1", parameters={}, timeout_s=timeout_s)
@@ -281,7 +290,7 @@ async def test_the_synchronous_wait_is_clamped(timeout_s: int | None, expected: 
 async def test_a_statement_that_returned_nothing_is_empty_not_a_crash() -> None:
     api = _Api(_response(manifest=None, result=None))
     client = StatementExecutionClient(
-        api=api, warehouse_id="abc123", catalog="samples", schema="tpch"
+        api=api, warehouse_id="abc123", catalog="samples", schema="tpch", parameter=_parameter
     )
 
     result = await client.statement("SHOW TBLPROPERTIES t", parameters={})
@@ -293,7 +302,7 @@ async def test_a_statement_that_returned_nothing_is_empty_not_a_crash() -> None:
 async def test_an_api_reported_error_is_raised_rather_than_read_as_empty() -> None:
     api = _Api(_response(status=SimpleNamespace(error=SimpleNamespace(message="[X] failed"))))
     client = StatementExecutionClient(
-        api=api, warehouse_id="abc123", catalog="samples", schema="tpch"
+        api=api, warehouse_id="abc123", catalog="samples", schema="tpch", parameter=_parameter
     )
 
     with pytest.raises(EngineConnectionError, match=r"\[X\] failed"):
@@ -310,15 +319,36 @@ async def test_building_a_client_without_the_sdk_says_what_to_install() -> None:
 
 async def test_building_a_client_wires_the_statement_execution_api() -> None:
     workspace = SimpleNamespace(statement_execution=_Api(_response()))
-    module = SimpleNamespace(WorkspaceClient=lambda **kwargs: workspace)
+    sdk = SimpleNamespace(WorkspaceClient=lambda **kwargs: workspace)
+    parameters = SimpleNamespace(StatementParameterListItem=_parameter)
 
-    client = await build_databricks_client(
-        DatabricksTarget.from_env(ENV),
-        importer=lambda _: cast(ModuleType, module),
-    )
+    def importer(name: str) -> ModuleType:
+        return cast(ModuleType, parameters if name == DBX_PARAMETER_MODULE else sdk)
+
+    client = await build_databricks_client(DatabricksTarget.from_env(ENV), importer=importer)
 
     assert isinstance(client, StatementExecutionClient)
     assert client.warehouse_id == "abc123"
+    # the SDK's typed parameter class, not a dict builder
+    assert client.parameter is _parameter
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "https://dbc-test.cloud.databricks.com/?o=1234567890123456",
+        "https://dbc-test.cloud.databricks.com/",
+        "dbc-test.cloud.databricks.com",
+    ],
+)
+def test_a_pasted_workspace_url_is_reduced_to_scheme_and_host(raw: str) -> None:
+    # the SDK appends its API path to whatever it is given; the extra parts made
+    # every statement return "NotFound: Not Found"
+    assert normalize_host(raw) == "https://dbc-test.cloud.databricks.com"
+
+
+def test_an_empty_host_stays_empty_so_the_missing_variable_is_reported() -> None:
+    assert normalize_host("  ") == ""
 
 
 async def test_an_unreachable_workspace_says_so() -> None:
@@ -337,9 +367,9 @@ async def test_an_unreachable_workspace_says_so() -> None:
 async def test_a_datetime_parameter_travels_in_iso_form() -> None:
     api = _Api(_response())
     client = StatementExecutionClient(
-        api=api, warehouse_id="abc123", catalog="samples", schema="tpch"
+        api=api, warehouse_id="abc123", catalog="samples", schema="tpch", parameter=_parameter
     )
 
     await client.statement("SELECT :start", parameters={"start": datetime(2026, 8, 14, tzinfo=UTC)})
 
-    assert api.calls[0]["parameters"][0]["value"].startswith("2026-08-14T00:00:00")
+    assert api.calls[0]["parameters"][0].value.startswith("2026-08-14T00:00:00")

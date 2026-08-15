@@ -1,0 +1,2 @@
+Plan summary (databricks):
+- plan nodes on Photon: 100%

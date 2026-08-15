@@ -20,6 +20,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
+from urllib.parse import urlsplit
 
 from agentdb.adapters.base import EngineConnectionError
 from agentdb.adapters.databricks import DatabricksClient, StatementResult
@@ -27,6 +28,9 @@ from agentdb.adapters.databricks import DatabricksClient, StatementResult
 Importer = Callable[[str], ModuleType]
 
 SDK = "databricks.sdk"
+PARAMETER_MODULE = "databricks.sdk.service.sql"
+"""Where ``StatementParameterListItem`` lives; imported through the same
+injected importer so unit tests still need no SDK."""
 
 MIN_WAIT_SECONDS = 5
 MAX_WAIT_SECONDS = 50
@@ -79,7 +83,7 @@ class DatabricksTarget:
                 ),
             )
         return cls(
-            host=host,
+            host=normalize_host(host),
             warehouse_id=warehouse,
             token=source.get("AGENTDB_DBX_TOKEN", ""),
             client_id=source.get("AGENTDB_DBX_CLIENT_ID", ""),
@@ -87,6 +91,22 @@ class DatabricksTarget:
             catalog=source.get("AGENTDB_DBX_CATALOG", "samples"),
             schema=source.get("AGENTDB_DBX_SCHEMA", "tpch"),
         )
+
+
+def normalize_host(raw: str) -> str:
+    """Reduce a pasted workspace URL to the scheme and host the SDK wants.
+
+    Operators copy the address bar, which carries a path and the ``?o=`` account
+    parameter: ``https://dbc-....cloud.databricks.com/?o=1234``. The SDK appends
+    its API path to whatever it is given, so the extra parts turn every statement
+    into a 404 that reads as ``NotFound: Not Found`` and looks like a missing
+    table rather than a malformed host. Observed on a Free Edition workspace.
+    """
+    text = raw.strip().rstrip("/")
+    if not text:
+        return text
+    parsed = urlsplit(text if "//" in text else f"https://{text}")
+    return f"{parsed.scheme or 'https'}://{parsed.netloc}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +137,15 @@ class StatementExecutionClient:
     warehouse_id: str
     catalog: str
     schema: str
+    parameter: Callable[..., Any]
+    """Builds one API parameter object, by keyword: ``parameter(name=…, value=…)``.
+
+    Deliberately injected rather than defaulted. The API takes a typed
+    ``StatementParameterListItem``, not a dict, and a plain dict fails inside the
+    SDK with ``'dict' object has no attribute 'as_dict'`` — observed on the first
+    live run. Requiring it here means a caller cannot forget it and discover the
+    problem against a real warehouse."""
+
     wait_timeout: str = DEFAULT_WAIT_TIMEOUT
 
     async def statement(
@@ -142,7 +171,8 @@ class StatementExecutionClient:
             catalog=self.catalog,
             schema=self.schema,
             parameters=[
-                {"name": name, "value": _api_value(value)} for name, value in parameters.items()
+                self.parameter(name=name, value=_api_value(value))
+                for name, value in parameters.items()
             ],
             row_limit=row_limit,
             byte_limit=byte_limit,
@@ -221,6 +251,7 @@ async def build_client(
         warehouse_id=target.warehouse_id,
         catalog=target.catalog,
         schema=target.schema,
+        parameter=importer(PARAMETER_MODULE).StatementParameterListItem,
     )
     return client
 

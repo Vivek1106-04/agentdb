@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
+from urllib.parse import urlsplit
 
 from agenteval.engines.clickhouse import ClickHouseClient
 from agenteval.engines.databricks import DatabricksClient
@@ -21,6 +22,9 @@ Importer = Callable[[str], ModuleType]
 
 DRIVER = "clickhouse_connect"
 DBX_SDK = "databricks.sdk"
+DBX_PARAMETER_MODULE = "databricks.sdk.service.sql"
+"""Where ``StatementParameterListItem`` lives; reached through the same injected
+importer, so unit tests still need no SDK."""
 
 DEFAULT_USER = "agentdb_ro"
 """The read-only role from ``docker/seed/clickhouse``. Read-only is a property of
@@ -128,7 +132,7 @@ class DatabricksTarget:
                 "OAuth client id and secret."
             )
         return cls(
-            host=host,
+            host=normalize_host(host),
             warehouse_id=warehouse,
             token=source.get("AGENTEVAL_DBX_TOKEN", ""),
             client_id=source.get("AGENTEVAL_DBX_CLIENT_ID", ""),
@@ -136,6 +140,22 @@ class DatabricksTarget:
             catalog=source.get("AGENTEVAL_DBX_CATALOG", "samples"),
             schema=source.get("AGENTEVAL_DBX_SCHEMA", "tpch"),
         )
+
+
+def normalize_host(raw: str) -> str:
+    """Reduce a pasted workspace URL to the scheme and host the SDK wants.
+
+    Operators copy the address bar, which carries a path and the ``?o=`` account
+    parameter. The SDK appends its API path to whatever it is given, so those
+    extra parts turn every statement into a 404 that reads as
+    ``NotFound: Not Found`` — a message that looks like a missing table rather
+    than a malformed host. Observed on the first live Free Edition run.
+    """
+    text = raw.strip().rstrip("/")
+    if not text:
+        return text
+    parsed = urlsplit(text if "//" in text else f"https://{text}")
+    return f"{parsed.scheme or 'https'}://{parsed.netloc}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +181,11 @@ class StatementExecutionClient:
     warehouse_id: str
     catalog: str
     schema: str
+    parameter: Callable[..., Any]
+    """Builds one API parameter object by keyword. Injected rather than
+    defaulted: the API takes a typed ``StatementParameterListItem`` and a plain
+    dict fails inside the SDK with ``'dict' object has no attribute 'as_dict'``,
+    which is a failure worth catching in a unit test rather than in a bench run."""
 
     async def statement(
         self,
@@ -178,7 +203,7 @@ class StatementExecutionClient:
             catalog=self.catalog,
             schema=self.schema,
             parameters=[
-                {"name": name, "value": _text(value)} for name, value in parameters.items()
+                self.parameter(name=name, value=_text(value)) for name, value in parameters.items()
             ],
             row_limit=row_limit,
             wait_timeout=f"{high if timeout_s is None else min(max(timeout_s, low), high)}s",
@@ -238,5 +263,6 @@ async def build_databricks_client(
         warehouse_id=target.warehouse_id,
         catalog=target.catalog,
         schema=target.schema,
+        parameter=importer(DBX_PARAMETER_MODULE).StatementParameterListItem,
     )
     return client

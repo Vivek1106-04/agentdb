@@ -622,3 +622,28 @@ async def test_an_unreadable_duration_in_the_history_is_unknown_rather_than_zero
     assert entry.total_duration_ms is None
     assert entry.bytes_read is None
     assert entry.query_id is None
+
+
+async def test_an_explain_that_returned_an_analysis_error_is_raised_not_returned() -> None:
+    client = _client(
+        **{
+            "EXPLAIN FORMATTED": FakeResult(
+                columns=("plan",),
+                rows=(
+                    ("Error occurred during query planning: ",),
+                    (
+                        "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column with name `nope` "
+                        "cannot be resolved. SQLSTATE: 42703",
+                    ),
+                ),
+            )
+        }
+    )
+
+    # the warehouse answers EXPLAIN over invalid SQL with success and puts the
+    # error where the plan should be; handing that to the parser would turn a
+    # repairable semantic error into a crash
+    with pytest.raises(QuerySemanticError, match="UNRESOLVED_COLUMN"):
+        await _adapter(client).explain(
+            "SELECT nope FROM samples.tpch.lineitem", ExplainMode.ESTIMATE
+        )

@@ -168,6 +168,28 @@ def explain_statement(sql: str, mode: ExplainMode) -> str:
     return f"EXPLAIN EXTENDED {sql}"
 
 
+PHYSICAL_PLAN_MARKER: Final = "== Physical Plan =="
+"""Present in every ``EXPLAIN`` mode's output. Its absence means no plan."""
+
+PLANNING_ERROR_MARKERS: Final = ("Error occurred during query planning", "SQLSTATE:")
+
+
+def explain_failure(payload: str) -> str | None:
+    """The error inside an ``EXPLAIN`` result, if the statement did not plan.
+
+    Databricks answers ``EXPLAIN`` over an invalid query with **success**, and
+    puts the analysis error in the result rows where a plan would be — observed
+    live against ``samples.tpch``. Left alone, the plan layer hands an agent an
+    unparseable payload, and a query the warehouse could name the error for
+    surfaces as a parser crash instead of a semantic failure it could repair.
+    """
+    if PHYSICAL_PLAN_MARKER in payload:
+        return None
+    if any(marker in payload for marker in PLANNING_ERROR_MARKERS):
+        return payload.strip()
+    return None
+
+
 def profile_statement(*, source: str, column: str, sample_percent: float) -> str:
     """The distribution probe for one column (SPEC §8.2, path 2).
 
@@ -297,10 +319,27 @@ def zorder_columns(history: Sequence[Mapping[str, Any]]) -> tuple[str, ...] | No
     for entry in history:
         if str(entry.get("operation", "")).upper() != "OPTIMIZE":
             continue
-        parameters = entry.get("operationParameters") or {}
-        if not isinstance(parameters, Mapping):
-            continue
+        parameters = operation_parameters(entry.get("operationParameters"))
         columns = string_tuple(parameters.get("zOrderBy"))
         if columns:
             return columns
     return None
+
+
+def operation_parameters(value: object) -> Mapping[str, Any]:
+    """``DESCRIBE HISTORY.operationParameters`` as a mapping.
+
+    The Statement Execution API returns this column as a **JSON string**, not as
+    a map — observed on a live workspace, where treating it as a mapping made
+    Z-ORDER mining silently find nothing on every table. A connector may hand
+    back a real map, so both are accepted and anything else reads as empty.
+    """
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, Mapping) else {}
+    return {}
