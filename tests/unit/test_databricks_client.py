@@ -232,7 +232,12 @@ def test_the_api_result_satisfies_the_shape_the_adapter_reads() -> None:
 def test_a_pasted_workspace_url_is_reduced_to_scheme_and_host(raw: str) -> None:
     # the SDK appends its API path to whatever it is given, so a trailing "?o="
     # turned every statement into "NotFound: Not Found" — a message that reads
-    # like a missing table rather than a malformed host
+    # like a missing table rather than a malformed host.
+    #
+    # The host here is a placeholder. The bug was found against a real workspace,
+    # but a test fixture is not the place to record which one: this repository is
+    # meant to be published, and the workspace address is the operator's, not the
+    # project's.
     assert normalize_host(raw) == "https://dbc-test.cloud.databricks.com"
 
 
