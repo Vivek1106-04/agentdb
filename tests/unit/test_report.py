@@ -197,3 +197,41 @@ def test_a_comparison_section_with_nothing_comparable_renders_empty() -> None:
     markdown = render([record(task_id="t1"), record(task_id="t9", system="A7_oracle")])
 
     assert "## Paired comparisons" not in markdown
+
+
+def test_product_context_the_arm_did_not_choose_is_named_in_the_report() -> None:
+    # the token columns count what the harness sent; a product that arrives with
+    # 19k tokens of its own would otherwise read as the leanest row in the table
+    records = [
+        {
+            **record(system="S5_claude_code", task_id="t1"),
+            "notes": ["claude_code_scaffolding_tokens=19462"],
+        },
+        {
+            **record(system="S5_claude_code", task_id="t2"),
+            "notes": ["claude_code_scaffolding_tokens=18830"],
+        },
+    ]
+
+    markdown = render(records, baseline="S5_claude_code")
+
+    assert "## Context the arm did not choose" in markdown
+    assert "19,462 tokens" in markdown
+    assert "not estimated" in markdown
+
+
+def test_an_arm_that_declared_no_extra_context_gets_no_such_section() -> None:
+    markdown = render([record()])
+
+    assert "Context the arm did not choose" not in markdown
+
+
+def test_notes_that_are_not_token_counts_are_ignored() -> None:
+    records = [
+        {
+            **record(),
+            "notes": ["the model refused", "retries=2", "scaffolding_tokens=nope"],
+        }
+    ]
+
+    assert "Context the arm did not choose" not in render(records)

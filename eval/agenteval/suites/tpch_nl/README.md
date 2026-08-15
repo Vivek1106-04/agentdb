@@ -10,6 +10,29 @@ per-engine rewrites would not prove it.
 will not fit a Databricks Free Edition workspace (spec 1.2). `tpch_nl` is the
 suite that crosses.
 
+## Measured ceiling: this seed set does not discriminate
+
+The first live run scored **36/36** — `S5_claude_code` on Databricks, twelve
+tasks, three repetitions, no failures. Read that as a fact about these tasks:
+they are too easy to separate one arm from another, and separating arms is the
+only thing this benchmark is for.
+
+The one task that did fail on the first attempt failed because the *question*
+was ambiguous, not because the system was wrong (see `tpch_nl_004`, corrected
+and documented in its notes). That is the other lesson: at this difficulty, the
+suite measures its own authoring more than it measures the systems.
+
+M4's task authoring therefore targets what this run could not provoke:
+
+- questions whose answer depends on a value distribution the schema does not
+  show, deep enough that guessing the convention fails;
+- multi-hop joins where the wrong join order changes the answer, not just the
+  cost;
+- date and interval semantics where an off-by-one boundary is invisible in the
+  result shape;
+- questions with a plausible wrong reading, so a system that pattern-matches
+  the phrasing lands somewhere different from one that reads the schema.
+
 ## Status: seed set, not v1
 
 This directory holds a **seed** of hand-authored tasks. SPEC §16 puts the full

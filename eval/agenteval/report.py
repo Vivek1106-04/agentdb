@@ -149,6 +149,9 @@ def render(records: Sequence[Mapping[str, Any]], *, baseline: str | None = None)
         sections += ["", _render_comparisons(compare_to_baseline(records, reference))]
 
     sections += ["", _render_footnotes(summaries)]
+    undeclared = _render_undeclared_context(records)
+    if undeclared:
+        sections += ["", undeclared]
     return "\n".join(sections) + "\n"
 
 
@@ -265,6 +268,39 @@ def _render_footnotes(summaries: Sequence[ArmSummary]) -> str:
             + ", ".join(f"`{summary.system}`" for summary in managed)
             + ".",
         ]
+    return "\n".join(lines)
+
+
+def _render_undeclared_context(records: Sequence[Mapping[str, Any]]) -> str:
+    """Context an arm carried but did not choose, per SPEC §11.1's honesty rule.
+
+    Some systems are products, and a product ships its own prompt. The token
+    columns above count only what the arm sent, so an arm that arrived with tens
+    of thousands of tokens of its own would otherwise read as the leanest row in
+    the table. What cannot be measured is at least named.
+    """
+    seen: dict[str, int] = {}
+    for record in records:
+        for note in record.get("notes") or ():
+            key, separator, value = str(note).partition("=")
+            if separator and value.isdigit() and key.endswith("scaffolding_tokens"):
+                system = str(record.get("system", "unknown"))
+                seen[system] = max(seen.get(system, 0), int(value))
+    if not seen:
+        return ""
+
+    lines = ["## Context the arm did not choose", ""]
+    lines += [
+        f"- `{system}` carried up to **{tokens:,} tokens** of product context per call, "
+        "beyond the prompt this harness sent."
+        for system, tokens in sorted(seen.items())
+    ]
+    lines += [
+        "",
+        "> Counted from the product's own usage accounting, not estimated. It is "
+        "excluded from the token columns above because it is not the arm's "
+        "grounding — but a reader comparing rows should know it was there.",
+    ]
     return "\n".join(lines)
 
 
