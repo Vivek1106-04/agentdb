@@ -1,0 +1,105 @@
+# Multi-table questions. Join order and build side are decided by statistics the
+# agent cannot see in a schema dump: nation and region are tiny, lineitem is
+# millions of rows, and nothing in the DDL says so.
+- id: tpch_nl_007
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "How many orders were placed by customers in the automobile market segment?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM orders
+    JOIN customer ON o_custkey = c_custkey
+    WHERE c_mktsegment = 'AUTOMOBILE'
+  difficulty: medium
+  tags: [join, enum_semantics]
+  notes: >-
+    c_mktsegment is uppercase. A model that writes 'Automobile' gets zero rows
+    and no error - the same silent-wrong-answer class as the order-priority
+    task, reached through a join this time.
+
+- id: tpch_nl_008
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "Which five nations have the most customers?"
+  gold_sql: |
+    SELECT n_name, COUNT(*) AS customer_count
+    FROM customer
+    JOIN nation ON c_nationkey = n_nationkey
+    GROUP BY n_name
+    ORDER BY customer_count DESC, n_name
+    LIMIT 5
+  difficulty: medium
+  tags: [join, group_by, limit, small_dimension]
+  notes: >-
+    nation has 25 rows against customer's 150,000. Which side the planner builds
+    decides whether this is a broadcast or a shuffle, and the row counts that
+    decide it are statistics, not schema.
+
+- id: tpch_nl_009
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "What was the total revenue, after discounts, from line items shipped
+    to customers in Europe during 1995?"
+  gold_sql: |
+    SELECT SUM(l_extendedprice * (1 - l_discount)) AS revenue
+    FROM lineitem
+    JOIN orders ON l_orderkey = o_orderkey
+    JOIN customer ON o_custkey = c_custkey
+    JOIN nation ON c_nationkey = n_nationkey
+    JOIN region ON n_regionkey = r_regionkey
+    WHERE r_name = 'EUROPE'
+      AND l_shipdate >= DATE '1995-01-01'
+      AND l_shipdate < DATE '1996-01-01'
+  difficulty: hard
+  tags: [join, filter, date_range, derived_measure, tpch_q5_derived]
+  notes: >-
+    Four joins from the largest table down to a five-row dimension, plus the
+    date range that decides how much of lineitem is read at all. The task the
+    physical-design arms should separate on: the join path is discoverable from
+    the keys, the pruning is not.
+
+- id: tpch_nl_010
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "Which parts have the largest total quantity ordered? Give the top ten
+    part names with their quantities."
+  gold_sql: |
+    SELECT p_name, SUM(l_quantity) AS total_quantity
+    FROM lineitem
+    JOIN part ON l_partkey = p_partkey
+    GROUP BY p_name
+    ORDER BY total_quantity DESC, p_name
+    LIMIT 10
+  difficulty: hard
+  tags: [join, group_by, high_cardinality, limit]
+  notes: >-
+    Grouping by p_name is a high-cardinality group over a join of the two
+    largest tables. A stats-grounded arm can warn before the query runs; an
+    unguided one finds out from the wall clock.
+
+- id: tpch_nl_011
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "How many suppliers are based in the same nation as the customer with
+    the largest account balance?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM supplier
+    WHERE s_nationkey = (
+      SELECT c_nationkey
+      FROM customer
+      ORDER BY c_acctbal DESC
+      LIMIT 1
+    )
+  difficulty: hard
+  tags: [subquery, correlated_reasoning]
+  notes: >-
+    A scalar subquery rather than a join, which is the shape models most often
+    rewrite incorrectly into a join that multiplies rows. Nothing about physical
+    design here - it is in the suite as a control, so a grounding delta cannot be
+    claimed on tasks where grounding is irrelevant.

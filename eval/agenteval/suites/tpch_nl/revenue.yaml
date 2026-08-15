@@ -1,0 +1,116 @@
+# Single-table questions over lineitem and orders: filters, aggregates, dates.
+# These are where physical-design grounding should show first — lineitem is the
+# large table, and whether a filter reaches the clustering key (Databricks) or
+# the sort key (ClickHouse) decides how much of it gets read.
+- id: tpch_nl_000
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "How many line items are there in total?"
+  gold_sql: |
+    SELECT COUNT(*) FROM lineitem
+  difficulty: easy
+  tags: [count, full_scan]
+  notes: >-
+    The floor. Every arm should get this, so a failure here means the schema
+    dump or the connection is wrong, not the model.
+
+- id: tpch_nl_001
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "What is the total revenue across all line items, after discounts?"
+  gold_sql: |
+    SELECT SUM(l_extendedprice * (1 - l_discount)) AS revenue
+    FROM lineitem
+  difficulty: easy
+  tags: [aggregate, derived_measure]
+  notes: >-
+    "Revenue after discounts" is the TPC-H convention
+    extendedprice * (1 - discount). A model that sums extendedprice alone is
+    wrong in a way no error message reports - the query succeeds.
+
+- id: tpch_nl_002
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "How many line items were shipped in 1995?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE l_shipdate >= DATE '1995-01-01' AND l_shipdate < DATE '1996-01-01'
+  difficulty: easy
+  tags: [filter, date_range, pushdown]
+  notes: >-
+    The pushdown test. A range on the column pushes to per-file statistics; the
+    equivalent year(l_shipdate) = 1995 does not, and reads every file. Both
+    return the same answer, so only the plan tells them apart - which is exactly
+    what the A3 arm is supposed to notice.
+
+- id: tpch_nl_003
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "Break down the line items by return flag and line status, with the
+    count and the total quantity in each group."
+  gold_sql: |
+    SELECT l_returnflag, l_linestatus, COUNT(*) AS line_count, SUM(l_quantity) AS total_quantity
+    FROM lineitem
+    GROUP BY l_returnflag, l_linestatus
+    ORDER BY l_returnflag, l_linestatus
+  difficulty: easy
+  tags: [group_by, low_cardinality, tpch_q1_derived]
+  notes: >-
+    Both grouping columns are single characters with a handful of distinct
+    values. A stats-grounded arm knows the result is tiny; an unguided one has
+    no idea whether this returns 4 rows or 4 million.
+
+- id: tpch_nl_004
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "Which orders were placed with the highest priority, and how many are there?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM orders
+    WHERE o_orderpriority = '1-URGENT'
+  difficulty: medium
+  tags: [filter, enum_semantics]
+  notes: >-
+    o_orderpriority values are prefixed strings - '1-URGENT', '2-HIGH' - not
+    plain words. A model that filters on 'URGENT' or 'HIGH' returns zero rows
+    and no error. This is the cheapest test of value-distribution grounding in
+    the suite: one look at the top values answers it.
+
+- id: tpch_nl_005
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "What is the average discount given on line items that were returned?"
+  gold_sql: |
+    SELECT AVG(l_discount)
+    FROM lineitem
+    WHERE l_returnflag = 'R'
+  difficulty: medium
+  tags: [filter, enum_semantics, aggregate]
+  notes: >-
+    "Returned" is l_returnflag = 'R'. The column is a flag with three values and
+    no comment explaining them; the mapping is only visible in the data.
+
+- id: tpch_nl_006
+  suite: tpch_nl
+  engine: [databricks]
+  namespace: tpch
+  question: "For each year, how much revenue was shipped, after discounts?"
+  gold_sql: |
+    SELECT EXTRACT(YEAR FROM l_shipdate) AS ship_year,
+           SUM(l_extendedprice * (1 - l_discount)) AS revenue
+    FROM lineitem
+    GROUP BY EXTRACT(YEAR FROM l_shipdate)
+    ORDER BY ship_year
+  difficulty: medium
+  tags: [group_by, date_part, derived_measure]
+  notes: >-
+    Grouping by a function of the date is correct here and unavoidable - the
+    warning worth emitting is about *filtering* through a function, not
+    grouping. A rules layer that confuses the two is noise.
