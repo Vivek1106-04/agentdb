@@ -38,13 +38,13 @@ test-e2e: ## Tests requiring live engines (make up first)
 
 check: lint typecheck arch test ## Everything CI runs
 
-up: ## Start Postgres + ClickHouse
+up: ## Start ClickHouse (measured) + Postgres/pgvector (exemplar store, SPEC 10)
 	docker compose -f docker/docker-compose.yml up -d --wait
 
 down: ## Stop engines and drop volumes
 	docker compose -f docker/docker-compose.yml down -v
 
-seed: ## Reload seed data into the running engines (extensions load on first start)
+seed: ## Reload seed data into the running containers (runs on first start too)
 	docker compose -f docker/docker-compose.yml exec -T postgres \
 		psql -U agentdb -d agentdb -f /docker-entrypoint-initdb.d/00-extensions.sql
 	docker compose -f docker/docker-compose.yml exec -T clickhouse \

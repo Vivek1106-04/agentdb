@@ -174,9 +174,11 @@ MAX_RESULT_ROWS: Final = 10_000
 """Rows returned to an agent. Bounded egress is a correctness property, not a nicety."""
 
 MAX_INDEX_CANDIDATES: Final = 50
-"""Upper bound on index candidates enumerated per advisor run.
+"""Upper bound on physical-design candidates enumerated per advisor run.
 
-Each candidate costs a hypopg round trip; the ranking is stable well before 50.
+Bounds skip-index candidates on ClickHouse and clustering-key candidates on
+Databricks. Each candidate costs a shadow-validation build to confirm, and the
+ranking is stable well before 50.
 """
 
 EXEMPLAR_RECENCY_TAU_DAYS: Final = 30.0

@@ -114,7 +114,7 @@ class Relation:
     ref: RelationRef
     kind: RelationKind
     engine_type: str | None
-    """Storage engine, e.g. ``MergeTree``. ``None`` on Postgres heap tables."""
+    """Storage engine or data source format, e.g. ``MergeTree``, ``DELTA``."""
 
     approx_rows: int | None
     on_disk_bytes: int | None

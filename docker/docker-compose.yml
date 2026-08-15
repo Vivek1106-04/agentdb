@@ -1,3 +1,8 @@
+# The two measured engines are ClickHouse and Databricks (spec 1.2). Only
+# ClickHouse is here: a Databricks SQL warehouse is a cloud service, reached
+# through AGENTEVAL_DBX_*, and its half of tpch_nl needs no local
+# infrastructure at all. Postgres is the exemplar store of SPEC §10, not a
+# system under test.
 name: agentdb
 
 services:
@@ -8,14 +13,6 @@ services:
       POSTGRES_USER: agentdb
       POSTGRES_PASSWORD: agentdb
       POSTGRES_DB: agentdb
-    command:
-      - postgres
-      - -c
-      - shared_preload_libraries=pg_stat_statements
-      - -c
-      - pg_stat_statements.track=all
-      - -c
-      - track_io_timing=on
     ports:
       - "55432:5432"
     volumes:
