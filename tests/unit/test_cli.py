@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -21,6 +21,7 @@ from agenteval.cli import (
     default_client,
     default_executor,
     default_tool_client,
+    executor_factory_for,
     load_grounded_configs,
     load_server_configs,
     parse_args,
@@ -30,6 +31,7 @@ from agenteval.cli import (
     summarize,
 )
 from agenteval.engines.connect import EngineConnectionError
+from agenteval.engines.databricks import DatabricksExecutor
 from agenteval.execution import QueryExecutor
 from agenteval.mcp.base import McpSession, ToolResult, ToolSpec
 from agenteval.mcp.config import McpServerConfig, parse_server
@@ -399,6 +401,57 @@ def _trace_line() -> str:
 async def test_the_default_executor_needs_a_driver_and_a_server() -> None:
     with pytest.raises(EngineConnectionError):
         await default_executor()
+
+
+async def test_the_databricks_executor_needs_a_configured_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENTEVAL_DBX_HOST", raising=False)
+    monkeypatch.delenv("AGENTEVAL_DBX_WAREHOUSE_ID", raising=False)
+
+    # refusing to start beats measuring a workspace nobody chose
+    with pytest.raises(EngineConnectionError, match="AGENTEVAL_DBX_HOST"):
+        await default_executor("databricks")
+
+
+async def test_the_databricks_executor_is_built_against_the_configured_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTEVAL_DBX_HOST", "https://dbc-test.cloud.databricks.com")
+    monkeypatch.setenv("AGENTEVAL_DBX_WAREHOUSE_ID", "abc123")
+    monkeypatch.setenv("AGENTEVAL_DBX_CATALOG", "main")
+
+    async def fake_client(target: Any) -> Any:
+        return object()
+
+    monkeypatch.setattr("agenteval.cli.build_databricks_client", fake_client)
+
+    executor = await default_executor("databricks")
+
+    assert executor.engine == "databricks"
+    assert isinstance(executor, DatabricksExecutor)
+    assert executor.catalog == "main"
+
+
+async def test_the_engine_flag_selects_which_executor_a_run_builds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENTEVAL_DBX_HOST", raising=False)
+    factory = executor_factory_for("databricks")
+
+    with pytest.raises(EngineConnectionError, match="AGENTEVAL_DBX_HOST"):
+        await factory()
+
+
+def test_bench_and_freeze_both_take_an_engine_defaulting_to_clickhouse() -> None:
+    bench = parse_args(["bench", "--engine", "databricks", "--suite", "tpch_nl"])
+    freeze = parse_args(["freeze-gold", "--engine", "databricks"])
+
+    assert isinstance(bench, BenchOptions)
+    assert bench.engine == "databricks"
+    assert isinstance(freeze, FreezeOptions)
+    assert freeze.engine == "databricks"
+    assert cast(BenchOptions, parse_args(["bench"])).engine == "clickhouse"
 
 
 def test_the_default_client_needs_an_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

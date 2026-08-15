@@ -2,7 +2,7 @@
 UV ?= uv
 RUN := $(UV) run
 
-.PHONY: help install fmt lint typecheck arch test test-unit test-contract test-e2e check up down seed load-clickbench freeze-gold bench bench-quick report demo clean
+.PHONY: help install fmt lint typecheck arch test test-unit test-contract test-e2e check up down seed load-clickbench freeze-gold bench bench-quick bench-quick-dbx report demo clean
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -72,6 +72,9 @@ bench: ## Full benchmark matrix; writes results/
 
 bench-quick: ## Small subset a stranger can run in five minutes
 	$(RUN) python -m agenteval bench --quick
+
+bench-quick-dbx: ## The same subset against a Databricks SQL warehouse (SPEC 18.1)
+	$(RUN) python -m agenteval bench --quick --engine databricks --suite tpch_nl
 
 report: ## Regenerate REPORT.md from committed traces (no model or engine calls)
 	$(RUN) python -m agenteval report --from-raw results/raw

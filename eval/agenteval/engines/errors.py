@@ -50,3 +50,61 @@ def clickhouse_error_class(message: str) -> ErrorClass | None:
     if match is None:
         return None
     return CLICKHOUSE_ERROR_CLASSES.get(int(match.group(1)), "semantic")
+
+
+_DBX_ERROR_CLASS = re.compile(r"\[([A-Z][A-Z0-9_.]+)\]")
+_SQLSTATE = re.compile(r"\bSQLSTATE:?\s*([0-9A-Z]{5})\b")
+
+DATABRICKS_ERROR_CLASSES: Mapping[str, ErrorClass] = {
+    "PARSE_SYNTAX_ERROR": "syntax",
+    "PARSE_EMPTY_STATEMENT": "syntax",
+    "TABLE_OR_VIEW_NOT_FOUND": "semantic",
+    "UNRESOLVED_COLUMN": "semantic",
+    "UNRESOLVED_ROUTINE": "semantic",
+    "AMBIGUOUS_REFERENCE": "semantic",
+    "SCHEMA_NOT_FOUND": "semantic",
+    "CATALOG_NOT_FOUND": "semantic",
+    "DATATYPE_MISMATCH": "semantic",
+    "UNSUPPORTED_FEATURE": "plan_rejection",
+    "UNSUPPORTED_EXPR_FOR_OPERATOR": "plan_rejection",
+    "OPERATION_CANCELED": "timeout",
+    "STATEMENT_TIMEOUT": "timeout",
+    "INSUFFICIENT_PERMISSIONS": "permission",
+    "MAX_RECORDS_PER_FETCH_EXCEEDED": "limit_exceeded",
+}
+"""Databricks names its own error classes. ``VERIFY:`` against the workspace
+runtime before citing these anywhere a reader will check them."""
+
+DATABRICKS_SQLSTATE_CLASSES: Mapping[str, ErrorClass] = {
+    "42601": "syntax",
+    "42P01": "semantic",
+    "42703": "semantic",
+    "42883": "semantic",
+    "42000": "semantic",
+    "42501": "permission",
+    "0A000": "plan_rejection",
+    "HY008": "timeout",
+    "57014": "timeout",
+    "54000": "limit_exceeded",
+}
+"""SQLSTATE carries the cases the named classes do not: it is standardized and
+moves far less between runtimes."""
+
+
+def databricks_error_class(message: str) -> ErrorClass | None:
+    """Classify a Databricks failure, or ``None`` if it never reached the warehouse.
+
+    A message with neither a named error class nor a SQLSTATE did not come from
+    the SQL layer — it is a dead connection or an auth failure, which is
+    run-fatal and must not be graded as a wrong answer.
+    """
+    named = _DBX_ERROR_CLASS.search(message)
+    if named is not None:
+        known = DATABRICKS_ERROR_CLASSES.get(named.group(1))
+        if known is not None:
+            return known
+
+    sqlstate = _SQLSTATE.search(message)
+    if sqlstate is not None:
+        return DATABRICKS_SQLSTATE_CLASSES.get(sqlstate.group(1), "semantic")
+    return "semantic" if named is not None else None

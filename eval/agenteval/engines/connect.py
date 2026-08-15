@@ -9,15 +9,18 @@ from __future__ import annotations
 
 import importlib
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import ModuleType
+from typing import Any
 
 from agenteval.engines.clickhouse import ClickHouseClient
+from agenteval.engines.databricks import DatabricksClient
 
 Importer = Callable[[str], ModuleType]
 
 DRIVER = "clickhouse_connect"
+DBX_SDK = "databricks.sdk"
 
 DEFAULT_USER = "agentdb_ro"
 """The read-only role from ``docker/seed/clickhouse``. Read-only is a property of
@@ -82,3 +85,158 @@ async def build_client(
 
     return_value: ClickHouseClient = client
     return return_value
+
+
+DBX_WAIT_SECONDS = (5, 50)
+"""The Statement Execution API's documented synchronous wait range."""
+
+
+@dataclass(frozen=True, slots=True)
+class DatabricksTarget:
+    """Which warehouse to run on, and as whom.
+
+    No credential has a default: a benchmark that silently reached a workspace
+    the operator did not choose would be worse than one that refused to start.
+    """
+
+    host: str
+    warehouse_id: str
+    token: str = ""
+    client_id: str = ""
+    client_secret: str = ""
+    catalog: str = "samples"
+    schema: str = "tpch"
+
+    @classmethod
+    def from_env(cls, env: dict[str, str] | None = None) -> DatabricksTarget:
+        """Read ``AGENTEVAL_DBX_*``. Credentials come from the environment only."""
+        source = os.environ if env is None else env
+        host = source.get("AGENTEVAL_DBX_HOST", "")
+        warehouse = source.get("AGENTEVAL_DBX_WAREHOUSE_ID", "")
+        missing = [
+            name
+            for name, value in (
+                ("AGENTEVAL_DBX_HOST", host),
+                ("AGENTEVAL_DBX_WAREHOUSE_ID", warehouse),
+            )
+            if not value
+        ]
+        if missing:
+            raise EngineConnectionError(
+                f"Databricks configuration is incomplete: {', '.join(missing)} is unset. "
+                "Export the host and warehouse id, plus either AGENTEVAL_DBX_TOKEN or an "
+                "OAuth client id and secret."
+            )
+        return cls(
+            host=host,
+            warehouse_id=warehouse,
+            token=source.get("AGENTEVAL_DBX_TOKEN", ""),
+            client_id=source.get("AGENTEVAL_DBX_CLIENT_ID", ""),
+            client_secret=source.get("AGENTEVAL_DBX_CLIENT_SECRET", ""),
+            catalog=source.get("AGENTEVAL_DBX_CATALOG", "samples"),
+            schema=source.get("AGENTEVAL_DBX_SCHEMA", "tpch"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StatementResponse:
+    """One statement's outcome, in the shape the executor reads."""
+
+    columns: tuple[str, ...]
+    rows: tuple[tuple[Any, ...], ...]
+    statement_id: str | None = None
+    rows_read: int | None = None
+    bytes_read: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StatementExecutionClient:
+    """The Statement Execution API behind the executor's client protocol.
+
+    Preferred over the DB-API connector because it returns a ``statement_id``
+    synchronously: attribution by primary key rather than by string matching.
+    """
+
+    api: Any
+    warehouse_id: str
+    catalog: str
+    schema: str
+
+    async def statement(
+        self,
+        sql: str,
+        *,
+        parameters: Mapping[str, Any],
+        row_limit: int | None = None,
+        timeout_s: int | None = None,
+    ) -> StatementResponse:
+        """Run one statement, passing values as markers rather than interpolating them."""
+        low, high = DBX_WAIT_SECONDS
+        response = self.api.execute_statement(
+            statement=sql,
+            warehouse_id=self.warehouse_id,
+            catalog=self.catalog,
+            schema=self.schema,
+            parameters=[
+                {"name": name, "value": _text(value)} for name, value in parameters.items()
+            ],
+            row_limit=row_limit,
+            wait_timeout=f"{high if timeout_s is None else min(max(timeout_s, low), high)}s",
+        )
+        status = getattr(response, "status", None)
+        error = getattr(status, "error", None) if status is not None else None
+        if error is not None:
+            raise EngineConnectionError(str(getattr(error, "message", error)))
+
+        manifest = getattr(response, "manifest", None)
+        schema_info = getattr(manifest, "schema", None) if manifest is not None else None
+        result = getattr(response, "result", None)
+        return StatementResponse(
+            columns=tuple(
+                str(column.name) for column in getattr(schema_info, "columns", None) or ()
+            ),
+            rows=tuple(tuple(row) for row in (getattr(result, "data_array", None) or ())),
+            statement_id=getattr(response, "statement_id", None),
+            rows_read=getattr(manifest, "total_row_count", None) if manifest is not None else None,
+            bytes_read=getattr(manifest, "total_byte_count", None)
+            if manifest is not None
+            else None,
+        )
+
+
+def _text(value: object) -> str:
+    """The API takes parameter values as strings, typed by the statement itself."""
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+async def build_databricks_client(
+    target: DatabricksTarget, *, importer: Importer = importlib.import_module
+) -> DatabricksClient:
+    """Connect, failing with a message that says what to install or configure."""
+    try:
+        module = importer(DBX_SDK)
+    except ImportError as exc:
+        raise EngineConnectionError(
+            "the 'databricks-sdk' package is not installed; install the optional "
+            "extra with: uv sync --extra databricks"
+        ) from exc
+
+    try:
+        workspace = module.WorkspaceClient(
+            host=target.host,
+            token=target.token or None,
+            client_id=target.client_id or None,
+            client_secret=target.client_secret or None,
+        )
+    except Exception as exc:
+        raise EngineConnectionError(
+            f"cannot reach the Databricks workspace at {target.host}: {exc}"
+        ) from exc
+
+    client: DatabricksClient = StatementExecutionClient(
+        api=workspace.statement_execution,
+        warehouse_id=target.warehouse_id,
+        catalog=target.catalog,
+        schema=target.schema,
+    )
+    return client

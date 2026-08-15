@@ -21,7 +21,13 @@ from pathlib import Path
 from typing import cast
 
 from agenteval.engines.clickhouse import ClickHouseExecutor
-from agenteval.engines.connect import ClickHouseTarget, build_client
+from agenteval.engines.connect import (
+    ClickHouseTarget,
+    DatabricksTarget,
+    build_client,
+    build_databricks_client,
+)
+from agenteval.engines.databricks import DatabricksExecutor
 from agenteval.execution import QueryExecutor
 from agenteval.freeze import compute_gold_hashes, write_gold_lock
 from agenteval.mcp.base import McpSession
@@ -43,9 +49,12 @@ from agenteval.systems.plan_aware import PlanAdvisor, PlanAwareSystem
 from agenteval.systems.providers import ProviderConfig, load_provider, load_provider_configs
 from agenteval.systems.raw_schema import ARM_NAME as BASELINE_ARM
 from agenteval.systems.raw_schema import RawSchemaSystem
+from agenteval.tasks import Engine
 from agenteval.traces import TraceWriter
 
 DEFAULT_SUITE = "clickbench_nl"
+DEFAULT_ENGINE: Engine = "clickhouse"
+ENGINES: tuple[Engine, ...] = ("clickhouse", "databricks")
 DEFAULT_MODEL = f"{PROVIDER}/claude-opus-5"
 DEFAULT_RAW = Path("results/raw")
 DEFAULT_SERVERS = Path("eval/servers.yaml")
@@ -80,6 +89,7 @@ class BenchOptions:
     """One fully-specified benchmark run."""
 
     suite: str = DEFAULT_SUITE
+    engine: Engine = DEFAULT_ENGINE
     arms: tuple[str, ...] = (BASELINE_ARM,)
     models: tuple[str, ...] = (DEFAULT_MODEL,)
     seeds: tuple[int, ...] = (0, 1, 2, 3, 4)
@@ -103,6 +113,7 @@ class FreezeOptions:
     """Committing verified gold hashes for a suite."""
 
     suite: str = DEFAULT_SUITE
+    engine: Engine = DEFAULT_ENGINE
 
 
 Command = BenchOptions | ReportOptions | FreezeOptions
@@ -115,6 +126,12 @@ def parse_args(argv: Sequence[str]) -> Command:
 
     bench = commands.add_parser("bench", help="run the matrix and write traces")
     bench.add_argument("--suite", default=DEFAULT_SUITE, help="shipped suite to run")
+    bench.add_argument(
+        "--engine",
+        default=DEFAULT_ENGINE,
+        choices=ENGINES,
+        help="engine to measure against; the suite is filtered to tasks targeting it",
+    )
     bench.add_argument("--arm", action="append", dest="arms", help="repeatable; defaults to A0")
     bench.add_argument("--model", action="append", dest="models", help="provider/name, repeatable")
     bench.add_argument("--seeds", type=int, default=5, help="repetitions per cell (>=5)")
@@ -135,18 +152,20 @@ def parse_args(argv: Sequence[str]) -> Command:
 
     freeze = commands.add_parser("freeze-gold", help="verify and commit gold hashes")
     freeze.add_argument("--suite", default=DEFAULT_SUITE)
+    freeze.add_argument("--engine", default=DEFAULT_ENGINE, choices=ENGINES)
 
     args = parser.parse_args(_with_default_command(argv))
 
     if args.command == "report":
         return ReportOptions(from_raw=args.from_raw, out=args.out, baseline=args.baseline)
     if args.command == "freeze-gold":
-        return FreezeOptions(suite=args.suite)
+        return FreezeOptions(suite=args.suite, engine=args.engine)
 
     if args.seeds < 1:
         raise CliError(f"--seeds must be >= 1, got {args.seeds}")
     return BenchOptions(
         suite=args.suite,
+        engine=args.engine,
         arms=tuple(args.arms or (BASELINE_ARM,)),
         models=tuple(args.models or (DEFAULT_MODEL,)),
         seeds=(0,) if args.quick else tuple(range(args.seeds)),
@@ -334,10 +353,31 @@ async def run_freeze(
     return path
 
 
-async def default_executor() -> QueryExecutor:
-    """The compose ClickHouse, reached as the read-only role."""
+async def default_executor(engine: Engine = "clickhouse") -> QueryExecutor:
+    """The engine a run measures against, reached as a read-only principal.
+
+    Two engines, one interface: the suite, the grader and the trace format do not
+    change, which is what makes the cross-engine comparison a comparison rather
+    than two unrelated experiments (SPEC §18.6).
+    """
+    if engine == "databricks":
+        dbx = DatabricksTarget.from_env()
+        return DatabricksExecutor(
+            client=await build_databricks_client(dbx),
+            catalog=dbx.catalog,
+            context_id="agenteval",
+        )
     target = ClickHouseTarget.from_env()
     return ClickHouseExecutor(client=await build_client(target), context_id="agenteval")
+
+
+def executor_factory_for(engine: Engine) -> ExecutorFactory:
+    """The factory ``bench`` and ``freeze-gold`` use for ``engine``."""
+
+    async def factory() -> QueryExecutor:
+        return await default_executor(engine)
+
+    return factory
 
 
 def default_client() -> ModelClient:

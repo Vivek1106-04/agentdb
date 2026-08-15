@@ -16,7 +16,7 @@ from agenteval.cli import (
     FreezeOptions,
     ReportOptions,
     default_client,
-    default_executor,
+    executor_factory_for,
     parse_args,
     run_bench,
     run_freeze,
@@ -60,12 +60,14 @@ def _dispatch(options: BenchOptions | ReportOptions | FreezeOptions) -> None:
         run_report(options, write=print)
         return
     if isinstance(options, FreezeOptions):
-        asyncio.run(run_freeze(options, executor_factory=default_executor, write=print))
+        asyncio.run(
+            run_freeze(options, executor_factory=executor_factory_for(options.engine), write=print)
+        )
         return
     asyncio.run(
         run_bench(
             options,
-            executor_factory=default_executor,
+            executor_factory=executor_factory_for(options.engine),
             client_factory=default_client,
             write=print,
         )
