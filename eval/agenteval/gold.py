@@ -7,9 +7,12 @@ the harness can detect the failure mode that quietly invalidates text-to-SQL
 benchmarks: the dataset changed, the gold query now returns something else, and
 every number computed since is wrong.
 
-``gold_result_hash`` in the task file is the tripwire. When present it is
-checked on every run, and a mismatch stops the run rather than reporting a
-plausible-looking number.
+The committed hash is the tripwire. It is held **per engine**, because the same
+question over the same data hashes differently on two engines — their drivers
+render values differently — so a single shared hash would fail every run on
+whichever engine did not freeze it. When a hash exists for the engine being
+measured it is checked on every run, and a mismatch stops the run rather than
+reporting a plausible-looking number.
 """
 
 from __future__ import annotations
@@ -35,14 +38,16 @@ async def resolve_gold(executor: QueryExecutor, task: Task) -> GoldResult:
         )
 
     gold = GoldResult(columns=emitted.columns, rows=emitted.rows)
-    if task.gold_result_hash is None:
+    committed = task.gold_hash_for(executor.engine)
+    if committed is None:
         return gold
 
     digest = result_hash(gold.columns, gold.rows, ordered=has_top_level_order_by(task.gold_sql))
-    if digest != task.gold_result_hash:
+    if digest != committed:
         raise GoldError(
-            f"gold drift on task {task.id!r}: the file commits {task.gold_result_hash}, "
-            f"the engine produced {digest}. Re-verify the data before trusting any result."
+            f"gold drift on task {task.id!r} against {executor.engine}: the lock file commits "
+            f"{committed}, the engine produced {digest}. Re-verify the data before trusting "
+            "any result."
         )
     return gold
 

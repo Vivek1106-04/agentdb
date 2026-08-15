@@ -28,8 +28,12 @@ two-pass authoring, gold hashes frozen against trusted data, ids stable.
 
 The scale factor must match across engines before a task runs on both: identical
 questions over different data produce different gold results, which would turn a
-cross-engine comparison into two unrelated experiments. `samples.tpch` is SF1
-(6,001,215 `lineitem` rows) and the ClickHouse side must be loaded to match.
+cross-engine comparison into two unrelated experiments.
+
+**Measured, not assumed:** `samples.tpch.lineitem` holds **29,999,795 rows** —
+scale factor 5, not the SF1 that TPC-H discussions usually default to. Counted on
+a Free Edition workspace on 2026-08-15, and the ClickHouse side must be loaded to
+match that, not to SF1.
 
 ## Authoring rules
 

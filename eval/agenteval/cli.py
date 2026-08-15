@@ -348,7 +348,7 @@ async def run_freeze(
     suite = load_builtin(options.suite)
     executor = await executor_factory()
     hashes = await compute_gold_hashes(executor, suite)
-    path = write_gold_lock(SUITES_DIR / options.suite, suite.name, hashes)
+    path = write_gold_lock(SUITES_DIR / options.suite, suite.name, hashes, engine=options.engine)
     write(f"froze {len(hashes)} gold result(s) -> {path}")
     return path
 

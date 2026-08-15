@@ -33,7 +33,7 @@ async def test_a_gold_query_that_does_not_run_is_fatal() -> None:
 
 
 async def test_a_matching_committed_hash_passes() -> None:
-    task = replace(sample_task(), gold_result_hash=GOLD_HASH)
+    task = replace(sample_task(), gold_result_hashes=(("clickhouse", GOLD_HASH),))
 
     gold = await resolve_gold(FakeExecutor(), task)
 
@@ -41,10 +41,20 @@ async def test_a_matching_committed_hash_passes() -> None:
 
 
 async def test_a_mismatched_committed_hash_stops_the_run() -> None:
-    task = replace(sample_task(), gold_result_hash="sha256:stale")
+    task = replace(sample_task(), gold_result_hashes=(("clickhouse", "sha256:stale"),))
 
     with pytest.raises(GoldError, match="gold drift on task"):
         await resolve_gold(FakeExecutor(), task)
+
+
+async def test_a_hash_frozen_on_another_engine_is_not_checked_against_this_one() -> None:
+    # the same question hashes differently per engine; a Databricks hash says
+    # nothing about a ClickHouse run, and must not stop it
+    task = replace(sample_task(), gold_result_hashes=(("databricks", "sha256:elsewhere"),))
+
+    gold = await resolve_gold(FakeExecutor(), task)
+
+    assert gold.rows == GOLD_ROWS
 
 
 async def test_order_sensitivity_is_taken_from_the_gold_query() -> None:
@@ -54,7 +64,7 @@ async def test_order_sensitivity_is_taken_from_the_gold_query() -> None:
     task = replace(
         sample_task(),
         gold_sql=ordered_sql,
-        gold_result_hash=result_hash(("count()",), GOLD_ROWS, ordered=True),
+        gold_result_hashes=(("clickhouse", result_hash(("count()",), GOLD_ROWS, ordered=True)),),
     )
 
     assert (await resolve_gold(FakeExecutor(), task)).rows == GOLD_ROWS

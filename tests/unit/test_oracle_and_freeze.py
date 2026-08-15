@@ -132,20 +132,57 @@ async def test_freezing_a_suite_the_engine_cannot_serve_is_refused() -> None:
 
 async def test_freezing_re_checks_existing_hashes_rather_than_papering_over_drift() -> None:
     # Arrange — a stale committed hash must fail the freeze, not be overwritten
-    drifted = TaskSuite(name="s", tasks=(replace(sample_task(), gold_result_hash="sha256:stale"),))
+    drifted = TaskSuite(
+        name="s",
+        tasks=(replace(sample_task(), gold_result_hashes=(("clickhouse", "sha256:stale"),)),),
+    )
 
     with pytest.raises(GoldError, match="gold drift"):
         await compute_gold_hashes(FakeExecutor(), drifted)
 
 
 def test_the_lock_file_is_sorted_and_self_documenting(tmp_path: Path) -> None:
-    path = write_gold_lock(tmp_path, "clickbench_nl", {"t2": "sha256:b", "t1": "sha256:a"})
+    path = write_gold_lock(
+        tmp_path, "clickbench_nl", {"t2": "sha256:b", "t1": "sha256:a"}, engine="clickhouse"
+    )
 
     text = path.read_text(encoding="utf-8")
     assert path.name == GOLD_LOCK_NAME
     assert "freeze-gold --suite clickbench_nl" in text
     assert text.index("t1:") < text.index("t2:")
-    assert yaml.safe_load(text) == {"t1": "sha256:a", "t2": "sha256:b"}
+    assert yaml.safe_load(text) == {
+        "t1": {"clickhouse": "sha256:a"},
+        "t2": {"clickhouse": "sha256:b"},
+    }
+
+
+def test_freezing_one_engine_does_not_erase_the_other(tmp_path: Path) -> None:
+    # a cross-engine suite is frozen twice, and the second freeze must not
+    # silently disarm drift detection on the first engine
+    write_gold_lock(tmp_path, "tpch_nl", {"t1": "sha256:ch"}, engine="clickhouse")
+    path = write_gold_lock(tmp_path, "tpch_nl", {"t1": "sha256:dbx"}, engine="databricks")
+
+    assert yaml.safe_load(path.read_text(encoding="utf-8")) == {
+        "t1": {"clickhouse": "sha256:ch", "databricks": "sha256:dbx"}
+    }
+
+
+def test_a_flat_lock_file_is_read_as_covering_every_engine(tmp_path: Path) -> None:
+    # the single-engine form authors wrote by hand stays valid
+    (tmp_path / GOLD_LOCK_NAME).write_text("t1: sha256:flat\n", encoding="utf-8")
+
+    path = write_gold_lock(tmp_path, "s", {"t1": "sha256:dbx"}, engine="databricks")
+
+    assert yaml.safe_load(path.read_text(encoding="utf-8")) == {
+        "t1": {"clickhouse": "sha256:flat", "databricks": "sha256:dbx"}
+    }
+
+
+def test_a_lock_file_that_is_not_a_mapping_cannot_be_merged_into(tmp_path: Path) -> None:
+    (tmp_path / GOLD_LOCK_NAME).write_text("- just\n- a list\n", encoding="utf-8")
+
+    with pytest.raises(GoldError, match="mapping of task id"):
+        write_gold_lock(tmp_path, "s", {"t1": "sha256:x"}, engine="databricks")
 
 
 # --------------------------------------------------------------------------
@@ -166,20 +203,23 @@ def _write_task(directory: Path, task_id: str, extra: str = "") -> None:
 
 def test_a_locked_hash_is_attached_to_its_task(tmp_path: Path) -> None:
     _write_task(tmp_path, "t1")
-    write_gold_lock(tmp_path, "s", {"t1": "sha256:frozen"})
+    write_gold_lock(tmp_path, "s", {"t1": "sha256:frozen"}, engine="clickhouse")
 
-    assert load_suite(tmp_path).by_id("t1").gold_result_hash == "sha256:frozen"
+    task = load_suite(tmp_path).by_id("t1")
+    assert task.gold_hash_for("clickhouse") == "sha256:frozen"
+    # frozen on one engine only: the other has nothing to check against
+    assert task.gold_hash_for("databricks") is None
 
 
 def test_a_suite_with_no_lock_file_still_loads(tmp_path: Path) -> None:
     _write_task(tmp_path, "t1")
 
-    assert load_suite(tmp_path).by_id("t1").gold_result_hash is None
+    assert load_suite(tmp_path).by_id("t1").gold_result_hashes == ()
 
 
 def test_a_lock_naming_an_unknown_task_is_refused(tmp_path: Path) -> None:
     _write_task(tmp_path, "t1")
-    write_gold_lock(tmp_path, "s", {"t9": "sha256:x"})
+    write_gold_lock(tmp_path, "s", {"t9": "sha256:x"}, engine="clickhouse")
 
     with pytest.raises(Exception, match="names task\\(s\\) that do not exist: t9"):
         load_suite(tmp_path)
@@ -188,7 +228,7 @@ def test_a_lock_naming_an_unknown_task_is_refused(tmp_path: Path) -> None:
 def test_a_hash_in_two_places_is_refused(tmp_path: Path) -> None:
     # One source of truth, or a reviewer cannot tell which one was verified
     _write_task(tmp_path, "t1", extra='gold_result_hash: "sha256:inline"\n')
-    write_gold_lock(tmp_path, "s", {"t1": "sha256:frozen"})
+    write_gold_lock(tmp_path, "s", {"t1": "sha256:frozen"}, engine="clickhouse")
 
     with pytest.raises(Exception, match="one source of truth"):
         load_suite(tmp_path)
@@ -198,7 +238,7 @@ def test_an_empty_lock_file_is_harmless(tmp_path: Path) -> None:
     _write_task(tmp_path, "t1")
     (tmp_path / GOLD_LOCK_NAME).write_text("", encoding="utf-8")
 
-    assert load_suite(tmp_path).by_id("t1").gold_result_hash is None
+    assert load_suite(tmp_path).by_id("t1").gold_result_hashes == ()
 
 
 def test_a_lock_file_that_is_not_a_mapping_is_refused(tmp_path: Path) -> None:

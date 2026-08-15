@@ -54,8 +54,16 @@ class Task:
     namespace: str = "agentdb"
     difficulty: Difficulty = "medium"
     tags: tuple[str, ...] = ()
-    gold_result_hash: str | None = None
-    """Hash of the canonical gold result, committed so gold drift is detectable."""
+    gold_result_hashes: tuple[tuple[Engine, str], ...] = ()
+    """Hash of the canonical gold result **per engine**, so drift is detectable.
+
+    Per engine, not per task, and that is not a nicety. The same question over
+    the same scale factor still hashes differently on two engines, because the
+    drivers render values differently — the Databricks Statement Execution API
+    returns every cell as text where ClickHouse returns typed numbers. One
+    shared hash would make a cross-engine suite fail on whichever engine did not
+    freeze it, which is exactly the suite that matters (SPEC §18.6).
+    """
 
     notes: str | None = None
     """Why the task is interesting — usually the schema semantics it probes."""
@@ -65,6 +73,10 @@ class Task:
     def targets(self, engine: Engine) -> bool:
         """Whether this task is meant to run against ``engine``."""
         return engine in self.engines
+
+    def gold_hash_for(self, engine: Engine) -> str | None:
+        """The committed hash for ``engine``, if one was frozen."""
+        return next((digest for name, digest in self.gold_result_hashes if name == engine), None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +149,7 @@ def parse_task(payload: Mapping[str, Any], *, source_path: str | None = None) ->
         namespace=str(payload.get("namespace", "agentdb")),
         difficulty=difficulty,
         tags=tuple(str(tag) for tag in payload.get("tags", ())),
-        gold_result_hash=_optional_str(payload.get("gold_result_hash")),
+        gold_result_hashes=_parse_hashes(payload["id"], payload.get("gold_result_hash")),
         notes=_optional_str(payload.get("notes")),
         source_path=source_path,
     )
@@ -203,17 +215,48 @@ def _apply_gold_lock(tasks: Sequence[Task], lock_path: Path) -> list[Task]:
 
     locked = []
     for task in tasks:
-        digest = document.get(task.id)
-        if digest is None:
+        entry = document.get(task.id)
+        if entry is None:
             locked.append(task)
             continue
-        if task.gold_result_hash is not None:
+        if task.gold_result_hashes:
             raise TaskLoadError(
                 f"task {task.id!r} has a gold_result_hash in both its file and "
                 f"{lock_path.name}; the lock file is the one source of truth"
             )
-        locked.append(replace(task, gold_result_hash=str(digest)))
+        locked.append(replace(task, gold_result_hashes=_parse_hashes(task.id, entry)))
     return locked
+
+
+def _parse_hashes(task_id: object, raw: object) -> tuple[tuple[Engine, str], ...]:
+    """Read a committed hash, in either the flat or the per-engine form.
+
+    A bare string means "this hash holds on every engine the task targets",
+    which is what a single-engine suite writes and what an author writes by
+    hand. A mapping names the engine each hash was frozen on, which is what a
+    cross-engine suite needs: the same question over the same data still hashes
+    differently on two engines, because their drivers render values differently.
+    """
+    if raw is None:
+        return ()
+    if isinstance(raw, Mapping):
+        hashes: list[tuple[Engine, str]] = []
+        for name, digest in raw.items():
+            engine = str(name)
+            if engine not in _ENGINES:
+                raise TaskLoadError(
+                    f"task {task_id!r} commits a gold hash for unknown engine {engine!r}; "
+                    f"expected one of {sorted(_ENGINES)}"
+                )
+            text = _optional_str(digest)
+            if text is None:
+                raise TaskLoadError(f"task {task_id!r} has an empty gold hash for {engine!r}")
+            hashes.append((engine, text))  # type: ignore[arg-type]
+        return tuple(sorted(hashes))
+    text = _optional_str(raw)
+    if text is None:
+        return ()
+    return tuple((engine, text) for engine in sorted(_ENGINES))  # type: ignore[misc]
 
 
 def _parse_engines(task_id: object, raw: object) -> tuple[Engine, ...]:

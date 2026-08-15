@@ -1,0 +1,28 @@
+# Gold result hashes, verified against a trusted copy of the data.
+# Regenerate with: python -m agenteval freeze-gold --suite tpch_nl
+# A mismatch at run time stops the run: the data changed, and every number
+# computed since is suspect (SPEC 11.2).
+tpch_nl_000:
+  databricks: sha256:d78057dfc687a81da8215cd7c88432561f0b8d4db081766d0c78955c7b937fc9
+tpch_nl_001:
+  databricks: sha256:2a2679816d59a99da3c6cf44b45dc5a083c960914143f6830e728b4e8949ff06
+tpch_nl_002:
+  databricks: sha256:ba88e71d79c239ecb6987faf6c62fc4bc970249cd62f255539e2b31442b70943
+tpch_nl_003:
+  databricks: sha256:adf6dbc42d063a256ede22fb71fa04bd7ad7009c87dff8ea56be69d0237e36c0
+tpch_nl_004:
+  databricks: sha256:01cc085268b59c88818d7b56611e8b2510cbead6f95849db96f1227c1d13abbe
+tpch_nl_005:
+  databricks: sha256:64e59251f38c186052adb7f2f2a5cb0ac930f5b9357bfb9c4ee618490f2c4196
+tpch_nl_006:
+  databricks: sha256:97dd2969725e6a4344710a2ced40d4f65980b9640183be87d058cd49a06a27a5
+tpch_nl_007:
+  databricks: sha256:dc71eee490181f49db8c39dcfbdadf9430599c1723085986a69e4d3b67e0be72
+tpch_nl_008:
+  databricks: sha256:f4ad9a990aeb5f97543e7ac28ac87aeb4ee446dc0daa441e7ccc81ff6506e02d
+tpch_nl_009:
+  databricks: sha256:1e302f922c3688da10ee8f88a2a5434edc42d68e1c0e476e24a189dbdee2f7f0
+tpch_nl_010:
+  databricks: sha256:941d3e323066df321c04c26fa7bcda5ae870b7e25ba7e4b6ec914ee527861bc6
+tpch_nl_011:
+  databricks: sha256:73acc2d4da0da6172880572ecc1cbc5298d3ef52997f9b990b96bca9d7c8b3ac

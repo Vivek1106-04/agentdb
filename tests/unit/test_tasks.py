@@ -25,7 +25,7 @@ def test_parses_a_minimal_task_with_documented_defaults() -> None:
     assert task.difficulty == "medium"
     assert task.namespace == "agentdb"
     assert task.tags == ()
-    assert task.gold_result_hash is None
+    assert task.gold_result_hashes == ()
 
 
 def test_parses_the_full_task_shape_from_the_spec() -> None:
@@ -94,7 +94,7 @@ def test_blank_content_is_rejected(field_name: str, message: str) -> None:
 def test_blank_optional_strings_become_none() -> None:
     task = parse_task({**VALID, "notes": "  ", "gold_result_hash": None})
     assert task.notes is None
-    assert task.gold_result_hash is None
+    assert task.gold_result_hashes == ()
 
 
 def _write(directory: Path, name: str, body: str) -> None:
