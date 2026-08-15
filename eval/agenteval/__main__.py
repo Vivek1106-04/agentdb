@@ -15,7 +15,7 @@ from agenteval.cli import (
     CliError,
     FreezeOptions,
     ReportOptions,
-    default_client,
+    client_for,
     executor_factory_for,
     parse_args,
     run_bench,
@@ -68,7 +68,7 @@ def _dispatch(options: BenchOptions | ReportOptions | FreezeOptions) -> None:
         run_bench(
             options,
             executor_factory=executor_factory_for(options.engine),
-            client_factory=default_client,
+            client_factory=lambda: client_for(options.models),
             write=print,
         )
     )

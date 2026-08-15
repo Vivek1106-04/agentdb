@@ -36,11 +36,15 @@ from agenteval.mcp.stdio import connect
 from agenteval.models.anthropic import PROVIDER, AnthropicClient, build_create
 from agenteval.models.anthropic_tools import AnthropicToolClient, MessageCreateWithTools
 from agenteval.models.base import ModelClient
+from agenteval.models.claude_cli import PROVIDER as CLI_PROVIDER
+from agenteval.models.claude_cli import ClaudeCliClient
 from agenteval.models.tools import ToolUsingClient
 from agenteval.report import load_run, render
 from agenteval.runner import Cell, RunSpec, new_run_id, run
 from agenteval.suites import SUITES_DIR, load_builtin
 from agenteval.systems.base import ModelSpec, SystemUnderTest
+from agenteval.systems.claude_code import ARM_NAME as CLAUDE_CODE_ARM
+from agenteval.systems.claude_code import ClaudeCodeSystem
 from agenteval.systems.grounded import GroundedSystem
 from agenteval.systems.mcp_generic import McpSystem
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
@@ -56,6 +60,10 @@ DEFAULT_SUITE = "clickbench_nl"
 DEFAULT_ENGINE: Engine = "clickhouse"
 ENGINES: tuple[Engine, ...] = ("clickhouse", "databricks")
 DEFAULT_MODEL = f"{PROVIDER}/claude-opus-5"
+MODEL_PROVIDERS: frozenset[str] = frozenset({PROVIDER, CLI_PROVIDER})
+"""Model channels a run may name. ``claude-cli`` drives Claude Code through a
+subscription and carries the product's own context (SPEC §11.5); it is a Family
+S measurement and never a Family A one."""
 DEFAULT_RAW = Path("results/raw")
 DEFAULT_SERVERS = Path("eval/servers.yaml")
 DEFAULT_PROVIDERS = Path("eval/providers.yaml")
@@ -68,6 +76,9 @@ QUICK_TASKS = 5
 ARMS: dict[str, Callable[[QueryExecutor, ModelClient], SystemUnderTest]] = {
     BASELINE_ARM: lambda executor, client: RawSchemaSystem.create(executor=executor, client=client),
     ORACLE_ARM: lambda executor, client: OracleSystem.create(executor=executor, client=client),
+    CLAUDE_CODE_ARM: lambda executor, client: ClaudeCodeSystem.create(
+        executor=executor, client=client
+    ),
 }
 """Arms that can be constructed today. Grows as A1-A6 and S1-S4 land."""
 
@@ -188,8 +199,10 @@ def parse_model(spec: str) -> ModelSpec:
     provider, separator, name = spec.partition("/")
     if not separator or not provider or not name:
         raise CliError(f"model {spec!r} must be written provider/name, e.g. {DEFAULT_MODEL}")
-    if provider != PROVIDER:
-        raise CliError(f"no adapter for provider {provider!r}; available: {PROVIDER}")
+    if provider not in MODEL_PROVIDERS:
+        raise CliError(
+            f"no adapter for provider {provider!r}; available: {', '.join(sorted(MODEL_PROVIDERS))}"
+        )
     return ModelSpec(provider=provider, name=name)
 
 
@@ -212,7 +225,7 @@ async def build_systems(
     executor: QueryExecutor,
     *,
     client: ModelClient,
-    tool_client: ToolUsingClient,
+    tool_client: ToolClientFactory,
     servers: Mapping[str, McpServerConfig],
     providers: Mapping[str, ProviderConfig],
     connector: Connector,
@@ -223,6 +236,10 @@ async def build_systems(
     Every MCP session opened is appended to ``sessions`` so the caller can close
     them even when the run fails: a leaked server process poisons the next
     arm's timings.
+
+    ``tool_client`` is a factory rather than a client because building one
+    requires an API key: a run of Family A arms alone must not fail on a
+    credential no arm in it uses.
     """
     known = {*ARMS, *servers, *providers}
     unknown = [arm for arm in arms if arm not in known]
@@ -241,7 +258,7 @@ async def build_systems(
         sessions.append(session)
         built.append(
             await McpSystem.create(
-                session=session, client=tool_client, executor=executor, config=servers[arm]
+                session=session, client=tool_client(), executor=executor, config=servers[arm]
             )
         )
     return tuple(built)
@@ -303,7 +320,7 @@ async def run_bench(
             options.arms,
             executor,
             client=client_factory(),
-            tool_client=tool_client_factory(),
+            tool_client=tool_client_factory,
             servers=load_server_configs(options.servers),
             providers=load_grounded_configs(options.providers),
             connector=connector,
@@ -378,6 +395,25 @@ def executor_factory_for(engine: Engine) -> ExecutorFactory:
         return await default_executor(engine)
 
     return factory
+
+
+def client_for(models: Sequence[str]) -> ModelClient:
+    """The adapter the named models require.
+
+    One client per run, so a run cannot silently mix a subscription-driven
+    product with a bare API model and report both under one arm.
+    """
+    providers = {parse_model(model).provider for model in models}
+    if len(providers) > 1:
+        raise CliError(
+            f"a run measures one model provider at a time; got {sorted(providers)}. "
+            "They are not the same channel: the CLI arm carries the product's own "
+            "context, the API arm does not."
+        )
+    provider = next(iter(providers), PROVIDER)
+    if provider == CLI_PROVIDER:
+        return ClaudeCliClient()
+    return AnthropicClient(create=build_create())
 
 
 def default_client() -> ModelClient:

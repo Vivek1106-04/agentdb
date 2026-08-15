@@ -18,6 +18,7 @@ from agenteval.cli import (
     FreezeOptions,
     ReportOptions,
     build_systems,
+    client_for,
     default_client,
     default_executor,
     default_tool_client,
@@ -36,6 +37,7 @@ from agenteval.execution import QueryExecutor
 from agenteval.mcp.base import McpSession, ToolResult, ToolSpec
 from agenteval.mcp.config import McpServerConfig, parse_server
 from agenteval.models.base import ModelClient, ModelError
+from agenteval.models.claude_cli import ClaudeCliClient
 from agenteval.models.tools import ToolResponse
 from agenteval.report import ReportError
 from agenteval.runner import Cell
@@ -143,7 +145,7 @@ def test_a_provider_with_no_adapter_is_refused() -> None:
 async def _build(arms: list[str], **overrides: object) -> tuple[SystemUnderTest, ...]:
     defaults: dict[str, Any] = {
         "client": ScriptedModelClient(),
-        "tool_client": StubToolClient(),
+        "tool_client": StubToolClient,
         "servers": {},
         "providers": {},
         "connector": _refuse_to_connect,
@@ -441,6 +443,35 @@ async def test_the_engine_flag_selects_which_executor_a_run_builds(
 
     with pytest.raises(EngineConnectionError, match="AGENTEVAL_DBX_HOST"):
         await factory()
+
+
+def test_the_claude_code_channel_is_a_selectable_model_provider() -> None:
+    spec = parse_model("claude-cli/sonnet")
+
+    assert (spec.provider, spec.name) == ("claude-cli", "sonnet")
+
+
+def test_an_unknown_provider_lists_the_ones_that_exist() -> None:
+    with pytest.raises(CliError, match="anthropic, claude-cli"):
+        parse_model("openai/gpt-5")
+
+
+def test_the_client_follows_the_provider_the_models_name() -> None:
+    assert isinstance(client_for(["claude-cli/sonnet"]), ClaudeCliClient)
+
+
+def test_the_api_channel_still_needs_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with pytest.raises(ModelError):
+        client_for(["anthropic/claude-opus-5"])
+
+
+def test_a_run_may_not_mix_the_subscription_channel_with_the_api_channel() -> None:
+    # they carry different context: one is a product, one is a bare model, and
+    # averaging them would publish a number for neither
+    with pytest.raises(CliError, match="one model provider at a time"):
+        client_for(["claude-cli/sonnet", "anthropic/claude-opus-5"])
 
 
 def test_bench_and_freeze_both_take_an_engine_defaulting_to_clickhouse() -> None:

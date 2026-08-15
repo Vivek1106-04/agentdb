@@ -69,7 +69,7 @@
   suite: tpch_nl
   engine: [databricks]
   namespace: tpch
-  question: "Which orders were placed with the highest priority, and how many are there?"
+  question: "How many orders were placed at the most urgent priority level?"
   gold_sql: |
     SELECT COUNT(*)
     FROM orders
@@ -81,6 +81,14 @@
     plain words. A model that filters on 'URGENT' or 'HIGH' returns zero rows
     and no error. This is the cheapest test of value-distribution grounding in
     the suite: one look at the top values answers it.
+
+    Gold-annotation correction, 2026-08-15: the question previously read "Which
+    orders were placed with the highest priority, and how many are there?",
+    which asks for two columns while the gold returns one. A system answered it
+    correctly and was scored wrong. The question now asks only for the count.
+    Corrected because the task was ambiguous, not because a system missed it -
+    the enum trap it exists to test is unchanged, and the gold SQL and its
+    frozen hash are untouched (SPEC 17, gold-annotation errors).
 
 - id: tpch_nl_005
   suite: tpch_nl
