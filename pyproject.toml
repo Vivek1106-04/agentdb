@@ -28,6 +28,7 @@ dependencies = [
 # key or a vendor SDK (SPEC §11.3 — adapters are pluggable).
 anthropic = ["anthropic>=0.45"]
 clickhouse = ["clickhouse-connect>=0.8"]
+databricks = ["databricks-sdk>=0.40"]
 mcp = ["mcp>=1.9"]
 
 [project.urls]
