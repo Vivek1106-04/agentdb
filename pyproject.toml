@@ -97,7 +97,7 @@ warn_unreachable = true
 disallow_any_explicit = false
 disallow_any_generics = true
 no_implicit_reexport = true
-files = ["src", "eval", "tests"]
+files = ["src", "eval", "tests", "scripts"]
 
 [[tool.mypy.overrides]]
 module = "tests.*"
@@ -160,4 +160,11 @@ exhaustive = false
 name = "core knows the adapter contract, never a concrete engine"
 type = "forbidden"
 source_modules = ["agentdb.core"]
-forbidden_modules = ["agentdb.adapters.clickhouse", "agentdb.adapters.clickhouse_sql"]
+forbidden_modules = [
+  "agentdb.adapters.clickhouse",
+  "agentdb.adapters.clickhouse_sql",
+  "agentdb.adapters.clickhouse_client",
+  "agentdb.adapters.databricks",
+  "agentdb.adapters.databricks_sql",
+  "agentdb.adapters.databricks_client",
+]
