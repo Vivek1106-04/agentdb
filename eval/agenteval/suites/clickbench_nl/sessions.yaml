@@ -1,0 +1,225 @@
+# ClickBench Q30-Q42 — per-visitor and per-page traffic questions, and the
+# counter-62 report set.
+#
+# Five of ClickBench's remaining queries have no honest natural-language form and
+# are deliberately absent, for the same reason Q17 is:
+#
+#   Q29  sums ResolutionWidth plus each offset from 0 to 89 across ninety columns.
+#        It measures column-expression throughput, not a question anyone asks.
+#   Q34  selects the literal 1 alongside URL and groups by it. The literal is an
+#        engine artifact; asked in words it is just Q33.
+#   Q35  groups by ClientIP and ClientIP minus 1, 2 and 3. Same artifact.
+#   Q40  filters on RefererHash = 3594120000172545465 and Q41 on a URLHash
+#   Q41  literal. A question cannot name a hash value and stay a question; the
+#        gold would be testing transcription.
+#
+# Where ClickBench pages with OFFSET into an ordering that has ties, the offset
+# is dropped rather than reproduced: rows 1001-1010 of a nondeterministic order
+# are not a gold result. Each such deviation is named in the task's notes.
+- id: clickbench_nl_030
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Among hits carrying a search phrase, which ten search engine and client
+    address pairs generated the most hits? For each give the hit count, how many
+    were refreshes, and the average screen width.
+  gold_sql: |
+    SELECT SearchEngineID, ClientIP, COUNT(*) AS c, SUM(IsRefresh), AVG(ResolutionWidth)
+    FROM hits
+    WHERE SearchPhrase <> ''
+    GROUP BY SearchEngineID, ClientIP
+    ORDER BY c DESC, SearchEngineID, ClientIP
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, high_cardinality, empty_string_sentinel, tiebroken, clickbench_original]
+  notes: >-
+    IsRefresh is 0 or 1, so summing it counts refreshes - a model that writes
+    COUNT(IsRefresh) counts every row instead and returns the group size twice.
+    ClientIP is stored as a signed 32-bit integer, not as text.
+
+- id: clickbench_nl_031
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Among hits carrying a search phrase, which ten hit and client address pairs
+    have the most rows? For each give the count, the number of refreshes, and the
+    average screen width.
+  gold_sql: |
+    SELECT WatchID, ClientIP, COUNT(*) AS c, SUM(IsRefresh), AVG(ResolutionWidth)
+    FROM hits
+    WHERE SearchPhrase <> ''
+    GROUP BY WatchID, ClientIP
+    ORDER BY c DESC, WatchID, ClientIP
+    LIMIT 10
+  difficulty: hard
+  tags: [group_by, top_n, very_high_cardinality, empty_string_sentinel, tiebroken, clickbench_original]
+  notes: >-
+    WatchID is close to unique, so this builds nearly as many groups as there are
+    matching rows and almost every count is 1. The tiebreak is doing real work
+    here: without it the ten rows returned are arbitrary among millions of ties,
+    which is exactly the defect that excluded Q17.
+
+- id: clickbench_nl_032
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Across all hits, which ten hit and client address pairs have the most rows?
+    For each give the count, the number of refreshes, and the average screen width.
+  gold_sql: |
+    SELECT WatchID, ClientIP, COUNT(*) AS c, SUM(IsRefresh), AVG(ResolutionWidth)
+    FROM hits
+    GROUP BY WatchID, ClientIP
+    ORDER BY c DESC, WatchID, ClientIP
+    LIMIT 10
+  difficulty: hard
+  tags: [group_by, top_n, very_high_cardinality, full_scan, tiebroken, clickbench_original]
+  notes: >-
+    clickbench_nl_031 without the filter, which is the pair ClickBench uses to
+    show what the search-phrase predicate was worth. Here the group count
+    approaches the row count of the whole table, and the aggregation state is the
+    dominant cost rather than the scan.
+
+- id: clickbench_nl_033
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which ten URLs were visited most often?"
+  gold_sql: |
+    SELECT URL, COUNT(*) AS c
+    FROM hits
+    GROUP BY URL
+    ORDER BY c DESC, URL
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, high_cardinality, full_scan, tiebroken, clickbench_original]
+  notes: >-
+    A group-by over a long, high-cardinality string column with no filter. The
+    empty URL is a real value here and is not excluded, unlike in
+    clickbench_nl_027 where the question says "carrying a URL".
+
+- id: clickbench_nl_036
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For counter 62 during July 2013, which ten URLs had the most page views?
+    Count only hits that are neither refreshes nor excluded from counting, and
+    ignore hits with no URL.
+  gold_sql: |
+    SELECT URL, COUNT(*) AS PageViews
+    FROM hits
+    WHERE CounterID = 62
+      AND EventDate >= '2013-07-01' AND EventDate <= '2013-07-31'
+      AND DontCountHits = 0 AND IsRefresh = 0 AND URL <> ''
+    GROUP BY URL
+    ORDER BY PageViews DESC, URL
+    LIMIT 10
+  difficulty: hard
+  tags: [group_by, top_n, sort_key_prefix, date_range, flag_semantics, tiebroken, clickbench_original]
+  notes: >-
+    The only shape in the suite that uses the primary index properly: CounterID
+    is the first sort-key column and EventDate the second, so this pair of
+    predicates prunes where every other task's filters cannot. DontCountHits and
+    IsRefresh are 0/1 flags whose names invite the wrong polarity - the question
+    asks to exclude both, so both are compared to 0.
+
+- id: clickbench_nl_037
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For counter 62 during July 2013, which ten page titles had the most page
+    views? Count only hits that are neither refreshes nor excluded from counting,
+    and ignore hits with no title.
+  gold_sql: |
+    SELECT Title, COUNT(*) AS PageViews
+    FROM hits
+    WHERE CounterID = 62
+      AND EventDate >= '2013-07-01' AND EventDate <= '2013-07-31'
+      AND DontCountHits = 0 AND IsRefresh = 0 AND Title <> ''
+    GROUP BY Title
+    ORDER BY PageViews DESC, Title
+    LIMIT 10
+  difficulty: hard
+  tags: [group_by, top_n, sort_key_prefix, date_range, flag_semantics, tiebroken, clickbench_original]
+  notes: >-
+    clickbench_nl_036 against Title instead of URL. The pair is worth keeping
+    because the two columns have different lengths and cardinalities, so the same
+    query shape reads materially different amounts of data.
+
+- id: clickbench_nl_038
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For counter 62 during July 2013, which ten URLs reached by following a link
+    had the most page views? Exclude refreshes and downloads.
+  gold_sql: |
+    SELECT URL, COUNT(*) AS PageViews
+    FROM hits
+    WHERE CounterID = 62
+      AND EventDate >= '2013-07-01' AND EventDate <= '2013-07-31'
+      AND IsRefresh = 0 AND IsLink <> 0 AND IsDownload = 0
+    GROUP BY URL
+    ORDER BY PageViews DESC, URL
+    LIMIT 10
+  difficulty: hard
+  tags: [group_by, top_n, sort_key_prefix, date_range, flag_semantics, tiebroken, clickbench_original]
+  notes: >-
+    Three flags with three different polarities in one predicate - IsLink must be
+    non-zero while IsRefresh and IsDownload must be zero - which is the shape
+    that makes flag semantics worth a task at all. ClickBench pages to rows
+    1001-1010 with OFFSET; the offset is dropped here because an offset into an
+    order with ties returns arbitrary rows.
+
+- id: clickbench_nl_039
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For counter 62 during July 2013, excluding refreshes, break page views down
+    by traffic source, search engine, advertising engine, the referring page and
+    the destination URL. Treat the referring page as blank unless the hit came
+    from neither a search engine nor an advertising engine. Give the ten
+    combinations with the most page views.
+  gold_sql: |
+    SELECT TraficSourceID,
+           SearchEngineID,
+           AdvEngineID,
+           CASE WHEN (SearchEngineID = 0 AND AdvEngineID = 0) THEN Referer ELSE '' END AS Src,
+           URL AS Dst,
+           COUNT(*) AS PageViews
+    FROM hits
+    WHERE CounterID = 62
+      AND EventDate >= '2013-07-01' AND EventDate <= '2013-07-31'
+      AND IsRefresh = 0
+    GROUP BY TraficSourceID, SearchEngineID, AdvEngineID, Src, Dst
+    ORDER BY PageViews DESC, TraficSourceID, SearchEngineID, AdvEngineID, Src, Dst
+    LIMIT 10
+  difficulty: hard
+  tags: [group_by, top_n, conditional_expression, sort_key_prefix, tiebroken, clickbench_original]
+  notes: >-
+    A conditional expression in the grouping key, so the key cannot be read from
+    a column - it has to be computed per row first. Zero means "none" for both
+    SearchEngineID and AdvEngineID, which is the sentinel convention the schema
+    does not state. Note ClickBench's own spelling, TraficSourceID, with one f.
+
+- id: clickbench_nl_042
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For counter 62 on 14 and 15 July 2013, excluding refreshes and hits excluded
+    from counting, how many page views occurred in each minute? Give the first
+    ten minutes in chronological order.
+  gold_sql: |
+    SELECT DATE_TRUNC('minute', EventTime) AS M, COUNT(*) AS PageViews
+    FROM hits
+    WHERE CounterID = 62
+      AND EventDate >= '2013-07-14' AND EventDate <= '2013-07-15'
+      AND IsRefresh = 0 AND DontCountHits = 0
+    GROUP BY DATE_TRUNC('minute', EventTime)
+    ORDER BY M
+    LIMIT 10
+  difficulty: hard
+  tags: [group_by, time_bucket, date_range, sort_key_prefix, flag_semantics, clickbench_original]
+  notes: >-
+    Truncation to the minute, which is a different operation from the minute of
+    the hour that clickbench_nl_018 extracts - one produces a timestamp per
+    minute of the two days, the other a number from 0 to 59. The grouping key is
+    unique so no tiebreak is needed. ClickBench pages to rows 1001-1010; the
+    offset is dropped and the question asks for the first ten instead.

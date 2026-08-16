@@ -56,9 +56,8 @@ CH := docker compose -f docker/docker-compose.yml exec -T clickhouse \
 	clickhouse-client --user agentdb --password agentdb --database agentdb
 
 load-clickbench: ## Load the ClickBench hits table (CLICKBENCH_PARTS=100 for the full set)
-	@echo "creating hits from ClickBench's own DDL..."
-	@curl -fsS https://raw.githubusercontent.com/ClickHouse/ClickBench/main/clickhouse/create.sql \
-		| $(CH) --multiquery
+	@echo "creating hits from the pinned ClickBench DDL..."
+	@$(CH) --multiquery < docker/seed/clickbench/schema.sql
 	@echo "loading $(CLICKBENCH_PARTS) parquet part(s)..."
 	@$(CH) --query "INSERT INTO hits SELECT * FROM url('https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_{0..$(shell expr $(CLICKBENCH_PARTS) - 1)}.parquet', Parquet) SETTINGS max_http_get_redirects=10, input_format_null_as_default=1"
 	@$(CH) --query "SELECT count() AS rows, formatReadableSize(sum(bytes_on_disk)) AS size FROM system.parts WHERE table='hits' AND active" 2>/dev/null || true

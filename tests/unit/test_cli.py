@@ -13,6 +13,7 @@ from agenteval.__main__ import EXIT_OK, EXIT_USAGE, main
 from agenteval.cli import (
     DEFAULT_MODEL,
     QUICK_TASKS,
+    SUITES_DIR,
     BenchOptions,
     CliError,
     FreezeOptions,
@@ -46,6 +47,7 @@ from agenteval.systems.base import SystemUnderTest
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
 from agenteval.systems.providers import ProviderConfig
 from agenteval.systems.raw_schema import ARM_NAME
+from agenteval.tasks import load_suite
 from agenteval.traces import read_records
 from tests.harness_fakes import FakeExecutor, ScriptedModelClient
 
@@ -570,9 +572,12 @@ async def test_the_freeze_command_writes_a_lock_beside_the_suite(
         _FreezeOptions(suite="clickbench_nl"), executor_factory=make_executor, write=lines.append
     )
 
-    # Assert — one hash per shipped ClickHouse task
+    # Assert — one hash per shipped ClickHouse task. The count is derived rather
+    # than written down: hardcoding it made authoring a task fail a test that is
+    # about the freeze command, not about how many questions the suite asks.
+    expected = len(load_suite(SUITES_DIR / "clickbench_nl").for_engine("clickhouse"))
     assert path.name == "gold.lock.yaml"
-    assert "froze 20 gold result(s)" in lines[0]
+    assert f"froze {expected} gold result(s)" in lines[0]
 
 
 @dataclass

@@ -15,10 +15,37 @@ data an engine benchmark uses.
 
 ## Status
 
-**20 of ~100 tasks.** This is the ClickBench-derived half. The authored half —
-questions with no public SQL counterpart, exercising sort-key-hostile filters,
-partition-predicate omission, wide `SELECT *`, and nullable join keys — is what
-makes the contamination check possible and lands next.
+**57 of ~100 tasks. Gold is not yet frozen** — the hashes require the full
+100-part table, and `gold.lock.yaml` lands with it.
+
+| file | ids | source |
+|---|---|---|
+| `aggregates.yaml`, `grouping.yaml`, `visitors.yaml` | 000–020 | ClickBench Q0–Q20 |
+| `text.yaml` | 021–028 | ClickBench Q21–Q28 |
+| `sessions.yaml` | 030–042 | ClickBench Q30–Q42 |
+| `layout.yaml` | 043–062 | authored for this project |
+
+ClickBench-derived translation is complete: every one of the 43 originals is
+either present or excluded for a stated reason (below). Ids at 043 and above are
+authored and carry no `clickbench_original` tag, which is what makes the
+contamination comparison in `docs/methodology.md` possible.
+
+### Originals deliberately excluded
+
+Q17 is Q16 with no `ORDER BY`, so its ten rows are whichever ten the engine
+produced. The others have no honest natural-language form:
+
+| query | why |
+|---|---|
+| Q29 | sums `ResolutionWidth + N` across ninety columns — it measures expression throughput, not a question anyone asks |
+| Q34 | selects the literal `1` beside `URL` and groups by it; in words it is just Q33 |
+| Q35 | groups by `ClientIP` and `ClientIP - 1`, `- 2`, `- 3` — the same artifact |
+| Q40, Q41 | filter on a raw `RefererHash` / `URLHash` constant; a question cannot name a hash value and stay a question |
+
+Where ClickBench pages with `OFFSET` into an order that has ties (Q38, Q39,
+Q42), the offset is dropped rather than reproduced — rows 1001–1010 of a
+nondeterministic order are not a gold result. Each deviation is named in the
+task's `notes`.
 
 ## Rules this suite follows
 

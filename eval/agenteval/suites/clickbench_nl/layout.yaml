@@ -1,0 +1,366 @@
+# Authored extensions, not ClickBench originals: the §7 failure modes on a
+# 100M-row table with a five-column sort key.
+#
+# hits is ordered by (CounterID, EventDate, UserID, EventTime, WatchID). A
+# ClickHouse primary index is sparse and prefix-based, so a filter serves it only
+# if it constrains a prefix of that tuple. Nothing in SHOW CREATE TABLE says
+# which of these questions that is, and every one of them is a question a person
+# would actually ask.
+#
+# Ids from 043 up are authored for this project. Ids below 043 track ClickBench's
+# own query numbers.
+- id: clickbench_nl_043
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits were recorded on 15 July 2013?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE EventDate = '2013-07-15'
+  difficulty: easy
+  tags: [count, date_filter, sort_key_second_column, pruning]
+  notes: >-
+    EventDate is the second sort-key column, so a filter on it alone constrains
+    no prefix and the primary index cannot serve it. The paired task is
+    clickbench_nl_044, which adds the CounterID the index needs; the two return
+    different answers to different questions but differ enormously in what they
+    read, and that difference is invisible in the DDL.
+
+- id: clickbench_nl_044
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits did counter 62 record on 15 July 2013?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE CounterID = 62 AND EventDate = '2013-07-15'
+  difficulty: easy
+  tags: [count, date_filter, sort_key_prefix, pruning]
+  notes: >-
+    The same shape as clickbench_nl_043 with the leading sort-key column
+    supplied, which turns a full scan into an index range. This is the pair the
+    layout arm exists to explain: a person asking the second question gets a fast
+    answer and a person asking the first does not, for reasons that have nothing
+    to do with how much data each one wants.
+
+- id: clickbench_nl_045
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits came from visitors on mobile devices?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE IsMobile <> 0
+  difficulty: medium
+  tags: [count, flag_semantics, sentinel, full_scan]
+  notes: >-
+    IsMobile is a small integer used as a flag, not a boolean type. A model that
+    writes IsMobile = true fails outright on ClickHouse; one that writes
+    IsMobile = 1 happens to be right only because the column never exceeds 1,
+    which the schema does not promise and MobilePhone disproves for its
+    neighbours.
+
+- id: clickbench_nl_046
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits recorded a phone model?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE MobilePhoneModel <> ''
+  difficulty: medium
+  tags: [count, empty_string_sentinel, full_scan]
+  notes: >-
+    The absence of a phone model is the empty string, never NULL - the column is
+    declared NOT NULL. IS NOT NULL therefore matches every row in the table and
+    returns the total hit count, which is a wrong answer that looks like a right
+    one.
+
+- id: clickbench_nl_047
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many distinct visitors did counter 62 see in July 2013?"
+  gold_sql: |
+    SELECT COUNT(DISTINCT UserID)
+    FROM hits
+    WHERE CounterID = 62
+      AND EventDate >= '2013-07-01' AND EventDate <= '2013-07-31'
+  difficulty: medium
+  tags: [distinct, high_cardinality, sort_key_prefix, date_range]
+  notes: >-
+    A distinct count over the third sort-key column, restricted by the first two.
+    The prefix is fully constrained, so this is the cheapest possible form of an
+    otherwise expensive question - the layout arm should be able to say so before
+    the query runs.
+
+- id: clickbench_nl_048
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For each region, how many hits and how many distinct visitors were there?
+    Give the 25 regions with the most hits.
+  gold_sql: |
+    SELECT RegionID, COUNT(*) AS hits_count, COUNT(DISTINCT UserID) AS visitors
+    FROM hits
+    GROUP BY RegionID
+    ORDER BY hits_count DESC, RegionID
+    LIMIT 25
+  difficulty: medium
+  tags: [group_by, distinct, high_cardinality, full_scan, tiebroken]
+  notes: >-
+    Two aggregates of very different cost over the same scan: counting rows is
+    nearly free once the data is read, while the distinct visitor count carries a
+    per-group state. RegionID is not in the sort key, so every row is read to
+    build the groups.
+
+- id: clickbench_nl_049
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Which ten screen resolutions, given as width and height together, appear most
+    often among mobile hits?
+  gold_sql: |
+    SELECT ResolutionWidth, ResolutionHeight, COUNT(*) AS c
+    FROM hits
+    WHERE IsMobile <> 0
+    GROUP BY ResolutionWidth, ResolutionHeight
+    ORDER BY c DESC, ResolutionWidth, ResolutionHeight
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, flag_semantics, multi_column, tiebroken]
+  notes: >-
+    A compound grouping key on two low-cardinality numeric columns, which is the
+    cheap counterpart to the URL and WatchID groupings elsewhere in the suite.
+    Resolutions of 0 are real rows and are not excluded, because the question
+    does not exclude them.
+
+- id: clickbench_nl_050
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits arrived without any referring page?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE Referer = ''
+  difficulty: easy
+  tags: [count, empty_string_sentinel, full_scan]
+  notes: >-
+    The inverse of the sentinel filter used throughout the ClickBench originals,
+    which always ask for Referer <> ''. Included so an arm cannot score by
+    learning that the empty string is always excluded.
+
+- id: clickbench_nl_051
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Among hits that came through a search engine, which ten search engines
+    delivered the most distinct visitors?
+  gold_sql: |
+    SELECT SearchEngineID, COUNT(DISTINCT UserID) AS visitors
+    FROM hits
+    WHERE SearchEngineID <> 0
+    GROUP BY SearchEngineID
+    ORDER BY visitors DESC, SearchEngineID
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, distinct, sentinel, top_n, tiebroken]
+  notes: >-
+    Zero means "no search engine", so "came through a search engine" is a filter
+    on the sentinel rather than on a NULL. A model that omits the filter adds a
+    group for zero that is larger than every real one and buries the answer.
+
+- id: clickbench_nl_052
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Show every stored field of the ten hits with the largest screen width, taking
+    the earliest hits where widths tie.
+  gold_sql: |
+    SELECT *
+    FROM hits
+    ORDER BY ResolutionWidth DESC, EventTime, WatchID
+    LIMIT 10
+  difficulty: medium
+  tags: [wide_select, top_n, full_scan, tiebroken]
+  notes: >-
+    All 105 columns for ten rows, with no filter to prune and a sort key that
+    serves none of the ordering. The question states the tiebreak because
+    resolution widths repeat heavily and without it the ten rows are arbitrary.
+
+- id: clickbench_nl_053
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "In which hour of the day did the most hits occur? Give the hour and the count."
+  gold_sql: |
+    SELECT EXTRACT(HOUR FROM EventTime) AS h, COUNT(*) AS c
+    FROM hits
+    GROUP BY EXTRACT(HOUR FROM EventTime)
+    ORDER BY c DESC, h
+    LIMIT 1
+  difficulty: medium
+  tags: [group_by, date_part, full_scan, top_n, tiebroken]
+  notes: >-
+    Hour of the day aggregated across the whole month, not hour of a particular
+    day. EventTime is the fourth sort-key column and is being decomposed rather
+    than filtered, so nothing prunes.
+
+- id: clickbench_nl_054
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For counter 62, how many hits were there on each day of July 2013? Order by date.
+  gold_sql: |
+    SELECT EventDate, COUNT(*) AS c
+    FROM hits
+    WHERE CounterID = 62
+      AND EventDate >= '2013-07-01' AND EventDate <= '2013-07-31'
+    GROUP BY EventDate
+    ORDER BY EventDate
+  difficulty: easy
+  tags: [group_by, date_range, sort_key_prefix, time_series]
+  notes: >-
+    A grouping key that is itself the second sort-key column, under a constrained
+    first column - the one shape where both the filter and the grouping follow
+    the physical order. The cheapest task in the file and the control for the
+    rest of it.
+
+- id: clickbench_nl_055
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits belong to counters with an identifier above 100000?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE CounterID > 100000
+  difficulty: medium
+  tags: [count, range_filter, sort_key_prefix, pruning]
+  notes: >-
+    A range rather than an equality on the leading sort-key column, which the
+    primary index still serves - the granules are ordered by CounterID, so a
+    one-sided bound is a scan from a mark rather than a full read. The contrast
+    with clickbench_nl_043, where the filtered column is second, is the whole
+    prefix rule in two tasks.
+
+- id: clickbench_nl_056
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits have a title longer than 100 characters?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE length(Title) > 100
+  difficulty: medium
+  tags: [count, function_wrapped_predicate, unprunable, full_scan]
+  notes: >-
+    A predicate on a function of a column rather than on the column. No index or
+    statistic can serve it: the value must be computed for every row before it
+    can be tested, so the whole Title column is decompressed regardless of how
+    few rows match.
+
+- id: clickbench_nl_057
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits occurred in the second half of July 2013?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE EventDate >= '2013-07-16' AND EventDate <= '2013-07-31'
+  difficulty: medium
+  tags: [count, date_range, sort_key_second_column, boundary_semantics]
+  notes: >-
+    "Second half" of a 31-day month is 16 days, not 15 and a half - the boundary
+    is a judgement the question forces and the result shape does not reveal.
+    EventDate again without CounterID, so the range prunes nothing.
+
+- id: clickbench_nl_058
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Which ten referring pages sent the most hits, ignoring hits that arrived
+    without one?
+  gold_sql: |
+    SELECT Referer, COUNT(*) AS c
+    FROM hits
+    WHERE Referer <> ''
+    GROUP BY Referer
+    ORDER BY c DESC, Referer
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, high_cardinality, empty_string_sentinel, tiebroken]
+  notes: >-
+    The referer counterpart to clickbench_nl_033's URL grouping, and the cheap
+    counterpart to clickbench_nl_028, which groups the same column by a regex
+    over it. Comparing the three shows what the derived key actually costs.
+
+- id: clickbench_nl_059
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Among hits that carry a search phrase, what is the average length of the phrase?
+  gold_sql: |
+    SELECT AVG(length(SearchPhrase))
+    FROM hits
+    WHERE SearchPhrase <> ''
+  difficulty: medium
+  tags: [average, function_wrapped_predicate, empty_string_sentinel, full_scan]
+  notes: >-
+    Excluding the empty string matters more than it looks: the empty phrases are
+    the large majority of rows, so including them collapses the average toward
+    zero. The answer is plausible either way.
+
+- id: clickbench_nl_060
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For each traffic source, how many hits and how many distinct visitors were
+    there? Order by traffic source.
+  gold_sql: |
+    SELECT TraficSourceID, COUNT(*) AS hits_count, COUNT(DISTINCT UserID) AS visitors
+    FROM hits
+    GROUP BY TraficSourceID
+    ORDER BY TraficSourceID
+  difficulty: medium
+  tags: [group_by, distinct, low_cardinality, full_scan]
+  notes: >-
+    TraficSourceID - ClickBench's spelling, one f - takes a small number of
+    values including negative ones, so the ordering runs from -1 upward and a
+    model that assumes a non-negative domain still gets the right rows in the
+    right order by accident. Few groups, whole-table scan.
+
+- id: clickbench_nl_061
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits were recorded for the visitor with identifier 435090932899640449?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE UserID = 435090932899640449
+  difficulty: easy
+  tags: [count, point_lookup, sort_key_third_column, pruning]
+  notes: >-
+    A point lookup on the third sort-key column with neither of the first two
+    constrained, so the index cannot narrow it and the whole UserID column is
+    read for a handful of rows. clickbench_nl_019 asks for the same visitor's
+    rows; this asks only for the count, so the two differ in what they project
+    but not in what they must scan.
+
+- id: clickbench_nl_062
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Among hits from a search engine that also carry a search phrase, which ten
+    phrases brought the most hits? Give the phrase and the count.
+  gold_sql: |
+    SELECT SearchPhrase, COUNT(*) AS c
+    FROM hits
+    WHERE SearchEngineID <> 0 AND SearchPhrase <> ''
+    GROUP BY SearchPhrase
+    ORDER BY c DESC, SearchPhrase
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, sentinel, empty_string_sentinel, high_cardinality, tiebroken]
+  notes: >-
+    Two different sentinels in one predicate - zero for the missing search engine
+    and the empty string for the missing phrase - which is the case that shows
+    whether an arm has learned the convention or just memorised one column's
+    version of it.

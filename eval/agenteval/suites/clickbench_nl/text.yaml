@@ -1,0 +1,176 @@
+# ClickBench Q21-Q28 — text predicates, URL and referer analysis, and the first
+# wide reads in the suite.
+#
+# Ids track the ClickBench query number, as they do throughout this suite. Where
+# ClickBench's own SQL orders by a column with ties, the gold here adds a
+# tiebreak: an ordering that does not determine its own output has no gold to
+# commit, which is the rule that kept Q17 out. Every such deviation is stated in
+# the task's notes.
+- id: clickbench_nl_021
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Among hits whose URL contains 'google' and that carry a search phrase, which
+    ten phrases occur most often? For each, also give the alphabetically first URL.
+  gold_sql: |
+    SELECT SearchPhrase, MIN(URL), COUNT(*) AS c
+    FROM hits
+    WHERE URL LIKE '%google%' AND SearchPhrase <> ''
+    GROUP BY SearchPhrase
+    ORDER BY c DESC, SearchPhrase
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, substring_match, empty_string_sentinel, tiebroken, clickbench_original]
+  notes: >-
+    MIN over a string column is the alphabetically first value, not the shortest
+    - the question says so because the two readings differ. The empty string is
+    the sentinel for "no search phrase"; SearchPhrase is never NULL, so IS NOT
+    NULL matches every row and quietly changes the answer.
+
+- id: clickbench_nl_022
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Among hits whose title mentions Google but whose URL is not on a google
+    domain, and that carry a search phrase, which ten phrases occur most often?
+    For each give the alphabetically first URL and title, the hit count, and how
+    many distinct visitors used it.
+  gold_sql: |
+    SELECT SearchPhrase, MIN(URL), MIN(Title), COUNT(*) AS c, COUNT(DISTINCT UserID)
+    FROM hits
+    WHERE Title LIKE '%Google%' AND URL NOT LIKE '%.google.%' AND SearchPhrase <> ''
+    GROUP BY SearchPhrase
+    ORDER BY c DESC, SearchPhrase
+    LIMIT 10
+  difficulty: hard
+  tags: [group_by, top_n, substring_match, negation, distinct, tiebroken, clickbench_original]
+  notes: >-
+    Three text predicates with different shapes: case-sensitive 'Google' in the
+    title, a negated pattern anchored by dots on the URL, and the empty-string
+    sentinel. '%.google.%' is not the same as '%google%' - it excludes the
+    domain without excluding the word, and a model that drops the dots removes
+    far more rows than asked.
+
+- id: clickbench_nl_023
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Show every stored field of the ten earliest hits whose URL contains 'google'.
+  gold_sql: |
+    SELECT *
+    FROM hits
+    WHERE URL LIKE '%google%'
+    ORDER BY EventTime, WatchID
+    LIMIT 10
+  difficulty: medium
+  tags: [wide_select, substring_match, top_n, tiebroken, clickbench_original]
+  notes: >-
+    All 105 columns, which on a columnar layout is the most expensive shape in
+    the suite relative to the ten rows it returns. ClickBench orders by EventTime
+    alone and EventTime ties, so WatchID is added here to make the ten rows a
+    fact rather than a race.
+
+- id: clickbench_nl_024
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "What were the ten earliest search phrases recorded, ignoring hits with none?"
+  gold_sql: |
+    SELECT SearchPhrase
+    FROM hits
+    WHERE SearchPhrase <> ''
+    ORDER BY EventTime, WatchID
+    LIMIT 10
+  difficulty: easy
+  tags: [top_n, ordering, empty_string_sentinel, tiebroken, clickbench_original]
+  notes: >-
+    One narrow column against tpch-style wide reads, ordered by a column that is
+    not in the projection. WatchID breaks the EventTime ties that would otherwise
+    make the answer nondeterministic.
+
+- id: clickbench_nl_025
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "What are the ten alphabetically first search phrases, ignoring hits with none?"
+  gold_sql: |
+    SELECT SearchPhrase
+    FROM hits
+    WHERE SearchPhrase <> ''
+    ORDER BY SearchPhrase
+    LIMIT 10
+  difficulty: easy
+  tags: [top_n, ordering, empty_string_sentinel, clickbench_original]
+  notes: >-
+    No tiebreak is needed and none is added: duplicates of the same phrase are
+    indistinguishable in the output, so the returned values are determined even
+    though the rows they came from are not. The contrast with clickbench_nl_023 is the
+    point - a tiebreak is required when the tied rows differ, not whenever ties
+    exist.
+
+- id: clickbench_nl_026
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Ordering by time and then alphabetically, what are the first ten search
+    phrases, ignoring hits with none?
+  gold_sql: |
+    SELECT SearchPhrase
+    FROM hits
+    WHERE SearchPhrase <> ''
+    ORDER BY EventTime, SearchPhrase, WatchID
+    LIMIT 10
+  difficulty: medium
+  tags: [top_n, ordering, multi_column, empty_string_sentinel, tiebroken, clickbench_original]
+  notes: >-
+    A two-key ordering where the keys pull in different directions, plus WatchID
+    to settle rows that tie on both. The question states the precedence because
+    "by time and alphabetically" is otherwise two different answers.
+
+- id: clickbench_nl_027
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For counters with more than 100,000 hits carrying a URL, what is the average
+    URL length? Give the 25 counters with the longest average, with their hit counts.
+  gold_sql: |
+    SELECT CounterID, AVG(length(URL)) AS l, COUNT(*) AS c
+    FROM hits
+    WHERE URL <> ''
+    GROUP BY CounterID
+    HAVING COUNT(*) > 100000
+    ORDER BY l DESC, CounterID
+    LIMIT 25
+  difficulty: hard
+  tags: [group_by, having, aggregate, sort_key_prefix, tiebroken, clickbench_original]
+  notes: >-
+    The threshold is post-aggregation and belongs in HAVING; filtering hits
+    instead of counters is the available wrong reading and returns a different
+    set of counters. CounterID is the first sort-key column, so this group-by is
+    the one shape in the suite the primary index actually serves.
+
+- id: clickbench_nl_028
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Grouping referring pages by their domain, and considering only domains with
+    more than 100,000 hits, which 25 domains have the longest average referer
+    URL? Give the domain, the average length, the hit count, and the
+    alphabetically first referer.
+  gold_sql: |
+    SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k,
+           AVG(length(Referer)) AS l,
+           COUNT(*) AS c,
+           MIN(Referer)
+    FROM hits
+    WHERE Referer <> ''
+    GROUP BY k
+    HAVING COUNT(*) > 100000
+    ORDER BY l DESC, k
+    LIMIT 25
+  difficulty: hard
+  tags: [group_by, having, regex, derived_key, tiebroken, clickbench_original]
+  notes: >-
+    The heaviest task in the suite: a regular expression evaluated over every
+    non-empty referer to build the grouping key, so the group-by cannot begin
+    until the whole column has been rewritten. Referers that do not match the
+    pattern are returned unchanged rather than dropped, which is a property of
+    REGEXP_REPLACE and not of the question.
