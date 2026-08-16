@@ -1,0 +1,235 @@
+# Questions whose cost is decided by physical design rather than by SQL skill.
+#
+# Both engines store lineitem ordered by (l_orderkey, l_linenumber) and orders by
+# o_orderkey. Every business question below filters on a date instead, and no
+# date column is a sort-key prefix on either engine. The correct answer is
+# therefore reachable from the schema alone, while the amount of data read to
+# reach it is not — which is the separation SPEC §7 asks these arms to expose.
+#
+# Accuracy is expected to be flat across the grounding arms here. Bytes read is
+# not. A task where every arm scores 1.0 still earns its place if the arms differ
+# on what they had to read.
+- id: tpch_nl_012
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many line items were shipped during 1995?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE l_shipdate >= DATE '1995-01-01'
+      AND l_shipdate < DATE '1996-01-01'
+  difficulty: easy
+  tags: [count, date_range, sort_key_hostile, pruning]
+  notes: >-
+    The plainest pruning task in the suite. l_shipdate is not a sort-key prefix
+    on either engine, so a full year of a 30M-row table is scanned to answer a
+    question whose selectivity is roughly one seventh. A half-open range is the
+    gold; BETWEEN would also be correct here because l_shipdate is a date with no
+    time part, and that equivalence is deliberately not true of tpch_nl_036.
+
+- id: tpch_nl_013
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many line items were shipped in the first seven days of March 1994?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE l_shipdate >= DATE '1994-03-01'
+      AND l_shipdate < DATE '1994-03-08'
+  difficulty: medium
+  tags: [count, date_range, sort_key_hostile, pruning, narrow_selectivity]
+  notes: >-
+    Selectivity near 0.03% and still no index to serve it. The pair with
+    tpch_nl_012 is the point: two questions three orders of magnitude apart in
+    selectivity that read comparable amounts of data, which is precisely what a
+    plan-grounded arm can warn about and a schema-only arm cannot.
+
+- id: tpch_nl_014
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many orders were placed on the very first day covered by the data?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM orders
+    WHERE o_orderdate = (SELECT MIN(o_orderdate) FROM orders)
+  difficulty: medium
+  tags: [subquery, min, date_filter, sort_key_hostile]
+  notes: >-
+    The first order date is 1992-01-01, but the question refuses to say so. A
+    model that hardcodes a guessed epoch is graded against one that derives it.
+    Both engines answer the subquery from column statistics rather than a scan,
+    which makes this the cheap counterpart to tpch_nl_015.
+
+- id: tpch_nl_015
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many line items were shipped on the latest ship date in the data?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE l_shipdate = (SELECT MAX(l_shipdate) FROM lineitem)
+  difficulty: medium
+  tags: [subquery, max, date_filter, sort_key_hostile]
+  notes: >-
+    The maximum l_shipdate is 1998-12-01, which is neither the maximum
+    o_orderdate (1998-08-02) nor the maximum l_receiptdate (1998-12-31). "The
+    latest date in the data" is three different dates depending on the column,
+    and only the schema-grounded reading picks the right one.
+
+- id: tpch_nl_016
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "For each year, how many line items were shipped? Order the answer by year."
+  gold_sql: |
+    SELECT EXTRACT(YEAR FROM l_shipdate) AS ship_year, COUNT(*) AS line_items
+    FROM lineitem
+    GROUP BY EXTRACT(YEAR FROM l_shipdate)
+    ORDER BY ship_year
+  difficulty: easy
+  tags: [group_by, date_part, full_scan, pruning]
+  notes: >-
+    A whole-table group-by with nothing to prune, included as the control for the
+    filtered pruning tasks. If a grounding arm shows a bytes-read advantage here,
+    something other than pruning is producing it and the result is suspect.
+
+- id: tpch_nl_017
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many orders were placed in the last three months of 1996?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM orders
+    WHERE o_orderdate >= DATE '1996-10-01'
+      AND o_orderdate < DATE '1997-01-01'
+  difficulty: easy
+  tags: [count, date_range, sort_key_hostile, pruning]
+  notes: >-
+    "Last three months" is a quarter boundary a model must resolve to October
+    through December rather than to a rolling window from the maximum date. The
+    two readings differ by roughly a full quarter of rows.
+
+- id: tpch_nl_018
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "What was the total discounted revenue from line items shipped in 1994
+    where the discount was between 5 and 7 percent and fewer than 24 units were ordered?"
+  gold_sql: |
+    SELECT SUM(l_extendedprice * l_discount) AS revenue
+    FROM lineitem
+    WHERE l_shipdate >= DATE '1994-01-01'
+      AND l_shipdate < DATE '1995-01-01'
+      AND l_discount >= 0.05
+      AND l_discount <= 0.07
+      AND l_quantity < 24
+  difficulty: hard
+  tags: [filter, date_range, derived_measure, sort_key_hostile, tpch_q6_derived]
+  notes: >-
+    TPC-H Q6. The measure is extendedprice times discount — the revenue *forgone*
+    to discounting, not revenue after it, which is the reading a model that
+    pattern-matches "discounted revenue" gets backwards. l_discount is stored as
+    a fraction, so "5 percent" is 0.05 and a model writing 5 silently returns
+    zero rows.
+
+- id: tpch_nl_019
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "Which ship modes were used for line items received in 1994, and how
+    many line items used each? Order by ship mode."
+  gold_sql: |
+    SELECT l_shipmode, COUNT(*) AS line_items
+    FROM lineitem
+    WHERE l_receiptdate >= DATE '1994-01-01'
+      AND l_receiptdate < DATE '1995-01-01'
+    GROUP BY l_shipmode
+    ORDER BY l_shipmode
+  difficulty: medium
+  tags: [group_by, date_range, enum_semantics, sort_key_hostile]
+  notes: >-
+    Filters on l_receiptdate rather than l_shipdate, which is the column a model
+    reaches for by habit. The two differ by weeks per row, so the wrong column
+    produces a plausible number that is simply not the answer. One of the seven
+    modes is 'REG AIR', with a space.
+
+- id: tpch_nl_020
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many line items were shipped before they were committed?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE l_shipdate < l_commitdate
+  difficulty: medium
+  tags: [column_comparison, unprunable, pruning]
+  notes: >-
+    A predicate between two columns of the same row. No file, granule, or
+    statistic can prune it on either engine — min/max skipping works on a column
+    against a constant, not on a column against a column. The task exists to give
+    the plan-grounded arm something it must decline to promise.
+
+- id: tpch_nl_021
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many line items were received more than 25 days after they were shipped?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE l_receiptdate > l_shipdate + INTERVAL 25 DAY
+  difficulty: hard
+  tags: [column_comparison, interval, unprunable, value_distribution]
+  notes: >-
+    The same unprunable shape as tpch_nl_020 with date arithmetic on top. The
+    threshold is measured rather than chosen: receipt is always between 1 and 30
+    days after shipment in TPC-H data, an invariant of the generator that no
+    schema states, so "more than 30 days" would be empty by construction and
+    would score every model that returned nothing. 25 days matches 4,998,475
+    line items, almost exactly one sixth. "More than" is strict, and the
+    off-by-one at the boundary is invisible in the result shape.
+
+- id: tpch_nl_022
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "What is the average quantity of line items shipped by air in 1995?"
+  gold_sql: |
+    SELECT AVG(l_quantity) AS average_quantity
+    FROM lineitem
+    WHERE l_shipmode = 'AIR'
+      AND l_shipdate >= DATE '1995-01-01'
+      AND l_shipdate < DATE '1996-01-01'
+  difficulty: medium
+  tags: [average, filter, enum_semantics, date_range, sort_key_hostile]
+  notes: >-
+    "By air" is 'AIR' and not 'REG AIR', which is a separate mode with its own
+    4.28M rows. Reading the question as either-or roughly doubles the matched
+    set. The value distribution decides the answer and the schema does not carry
+    it.
+
+- id: tpch_nl_023
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "In which calendar month, across all years, were the most line items
+    shipped? Give the month number and the count."
+  gold_sql: |
+    SELECT EXTRACT(MONTH FROM l_shipdate) AS ship_month, COUNT(*) AS line_items
+    FROM lineitem
+    GROUP BY EXTRACT(MONTH FROM l_shipdate)
+    ORDER BY line_items DESC, ship_month
+    LIMIT 1
+  difficulty: medium
+  tags: [group_by, date_part, top_n, full_scan, tiebroken]
+  notes: >-
+    Month of the year aggregated across years, not month of a particular year -
+    the reading that truncates to year-month instead returns 84 groups rather
+    than 12. The data thins out at the end of 1998, so the answer is not uniform
+    and the tiebreak on month number is load-bearing.

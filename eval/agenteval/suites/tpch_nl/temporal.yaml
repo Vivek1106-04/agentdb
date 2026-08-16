@@ -1,0 +1,188 @@
+# Date and interval semantics, where an off-by-one is invisible in the result.
+#
+# Every task here returns a single plausible number or a small well-formed table
+# whether or not the boundary is right. Nothing about the shape of the answer
+# betrays an inclusive end date, a leap day, or a window anchored to the wrong
+# column — only the gold does. SPEC §11.2 asks for exactly this class, and the
+# tpch_nl README names it as one the first live run could not provoke.
+- id: tpch_nl_036
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many orders were placed in the three months beginning 1 April 1995?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM orders
+    WHERE o_orderdate >= DATE '1995-04-01'
+      AND o_orderdate < DATE '1995-07-01'
+  difficulty: medium
+  tags: [count, date_range, boundary_semantics, tpch_q4_derived]
+  notes: >-
+    The TPC-H Q4 window shape. "Three months beginning 1 April" ends the instant
+    1 July begins, so 30 June is in and 1 July is out. A model writing BETWEEN
+    '1995-04-01' AND '1995-07-01' includes a day it should not and lands roughly
+    0.4% high — a difference no sanity check on the result would catch.
+
+- id: tpch_nl_037
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many line items were shipped in February 1996?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE l_shipdate >= DATE '1996-02-01'
+      AND l_shipdate < DATE '1996-03-01'
+  difficulty: medium
+  tags: [count, date_range, boundary_semantics, leap_year]
+  notes: >-
+    1996 is a leap year, so February has 29 days and the ship dates on the 29th
+    are real rows. A model that ends the range at '1996-02-28' silently drops a
+    day; one that writes '1996-02-30' is rejected outright. Only the half-open
+    form is right without knowing the month's length.
+
+- id: tpch_nl_038
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many orders were placed in the final calendar year covered by the
+    orders data?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM orders
+    WHERE o_orderdate >= DATE '1998-01-01'
+      AND o_orderdate < DATE '1999-01-01'
+  difficulty: hard
+  tags: [count, date_range, derived_boundary, partial_period]
+  notes: >-
+    Orders stop on 1998-08-02, so 1998 is a partial year — the count is well
+    below a full year's and that is correct. "Final calendar year" means all of
+    1998, not the trailing twelve months from the last order date, and the two
+    readings differ by hundreds of thousands of rows.
+
+- id: tpch_nl_039
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many line items were committed and received in the same calendar month?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE EXTRACT(YEAR FROM l_commitdate) = EXTRACT(YEAR FROM l_receiptdate)
+      AND EXTRACT(MONTH FROM l_commitdate) = EXTRACT(MONTH FROM l_receiptdate)
+  difficulty: hard
+  tags: [column_comparison, date_part, unprunable, boundary_semantics]
+  notes: >-
+    "Same calendar month" needs the year too, or January 1994 and January 1997
+    collapse together. Comparing only the month number is the natural shorthand
+    and inflates the count roughly sevenfold across the seven years of data.
+
+- id: tpch_nl_040
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many line items were received within a week of being shipped?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE l_receiptdate <= l_shipdate + INTERVAL 7 DAY
+  difficulty: hard
+  tags: [column_comparison, interval, boundary_semantics, unprunable]
+  notes: >-
+    "Within a week" is inclusive of the seventh day, unlike the strict "more
+    than 30 days" of tpch_nl_021. The pair exists so an arm cannot score by
+    always picking the same boundary convention. Receipt is never before ship in
+    this data, so no lower bound is needed.
+
+- id: tpch_nl_041
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "In which year was the total discounted revenue from shipped line items
+    highest? Give the year and the revenue."
+  gold_sql: |
+    SELECT EXTRACT(YEAR FROM l_shipdate) AS ship_year,
+           SUM(l_extendedprice * (1 - l_discount)) AS revenue
+    FROM lineitem
+    GROUP BY EXTRACT(YEAR FROM l_shipdate)
+    ORDER BY revenue DESC, ship_year
+    LIMIT 1
+  difficulty: medium
+  tags: [group_by, date_part, derived_measure, top_n, tiebroken]
+  notes: >-
+    Revenue after discount is extendedprice times one-minus-discount, the
+    opposite measure to tpch_nl_018's. 1998 is a partial year and 1992 starts
+    mid-stream, so the answer sits in the middle of the range rather than at
+    either end — a model that reasons about trends instead of computing gets it
+    wrong.
+
+- id: tpch_nl_042
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many orders were placed on a date that is also the ship date of at
+    least one line item?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM orders
+    WHERE o_orderdate IN (SELECT l_shipdate FROM lineitem)
+  difficulty: hard
+  tags: [subquery, semi_join, date_semantics, high_cardinality]
+  notes: >-
+    A semi-join across two large tables on a date domain rather than a key. The
+    IN form is deliberate: the LEFT JOIN phrasing of the same question is not
+    portable across these engines, because ClickHouse fills non-matching rows
+    with defaults where Spark uses NULL.
+
+- id: tpch_nl_043
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many days separate the earliest and latest order dates?"
+  gold_sql: |
+    SELECT MAX(o_orderdate) - MIN(o_orderdate) AS days_spanned
+    FROM orders
+  difficulty: medium
+  tags: [min_max, date_arithmetic, scalar]
+  notes: >-
+    Date subtraction yields a day count on both engines. The span runs
+    1992-01-01 to 1998-08-02. "How many days separate" is the difference, not the
+    inclusive count of days covered, which is one larger — the classic fencepost,
+    stated in a way that admits only one reading.
+
+- id: tpch_nl_044
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "For each year, how many orders reached the urgent priority level?
+    Order by year."
+  gold_sql: |
+    SELECT EXTRACT(YEAR FROM o_orderdate) AS order_year, COUNT(*) AS urgent_orders
+    FROM orders
+    WHERE o_orderpriority = '1-URGENT'
+    GROUP BY EXTRACT(YEAR FROM o_orderdate)
+    ORDER BY order_year
+  difficulty: hard
+  tags: [group_by, date_part, enum_semantics, value_distribution]
+  notes: >-
+    Combines the '1-URGENT' prefix trap of tpch_nl_028 with a per-year breakdown,
+    so a model can produce a perfectly shaped seven-row table that is entirely
+    empty or entirely the wrong priority. Shape-based plausibility checks do not
+    help here.
+
+- id: tpch_nl_045
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many line items have a commit date that falls on the last day of a month?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE EXTRACT(MONTH FROM l_commitdate) <> EXTRACT(MONTH FROM l_commitdate + INTERVAL 1 DAY)
+  difficulty: hard
+  tags: [date_part, interval, boundary_semantics, unprunable]
+  notes: >-
+    "Last day of a month" is 28, 29, 30 or 31 depending on the month and the
+    year, so no constant works. Adding a day and watching the month change is the
+    portable test; a model that hardcodes day 31, or 30-and-31, undercounts by
+    every short month in seven years of data.

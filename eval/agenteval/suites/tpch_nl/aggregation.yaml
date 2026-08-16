@@ -1,0 +1,126 @@
+# Shape-of-work tasks: high-cardinality grouping, wide column reads, and
+# distinct counts over the fact table.
+#
+# These separate arms on cost rather than on correctness. A columnar engine reads
+# only the columns named, so a question answered with two columns and one
+# answered with sixteen differ by an order of magnitude in bytes read while
+# scoring identically — the asymmetry SPEC §7 lists as a failure mode and the one
+# a schema dump gives an agent no reason to think about.
+- id: tpch_nl_054
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many distinct parts have ever appeared on a line item?"
+  gold_sql: |
+    SELECT COUNT(DISTINCT l_partkey) AS distinct_parts
+    FROM lineitem
+  difficulty: medium
+  tags: [distinct, high_cardinality, full_scan]
+  notes: >-
+    A distinct count with a million-way domain over 30M rows. Every part is
+    ordered at this scale factor, so the answer equals the row count of part —
+    which means a model can reach the right number from the wrong table and the
+    trace, not the score, is what distinguishes them.
+
+- id: tpch_nl_055
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "Which ten parts appear on the most line items? Give the part key and
+    the number of line items."
+  gold_sql: |
+    SELECT l_partkey, COUNT(*) AS line_items
+    FROM lineitem
+    GROUP BY l_partkey
+    ORDER BY line_items DESC, l_partkey
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, high_cardinality, top_n, full_scan, tiebroken]
+  notes: >-
+    A million groups built from 30M rows to return ten. The counts at the top are
+    close together and repeat, so without the tiebreak on l_partkey the answer is
+    whichever ten the engine happened to order first — the defect that kept
+    ClickBench Q17 out of clickbench_nl.
+
+- id: tpch_nl_056
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "Show every stored field of the five line items with the highest
+    extended price."
+  gold_sql: |
+    SELECT *
+    FROM lineitem
+    ORDER BY l_extendedprice DESC, l_orderkey, l_linenumber
+    LIMIT 5
+  difficulty: medium
+  tags: [wide_select, top_n, full_scan, tiebroken]
+  notes: >-
+    The deliberate wide read: sixteen columns including the comment text, against
+    the two a narrower question would touch. Both engines must decompress every
+    column of the matching rows, and on a columnar layout that is the difference
+    the bytes-read metric exists to show. The double tiebreak is required because
+    extended prices repeat.
+
+- id: tpch_nl_057
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many distinct customers placed an order in 1997?"
+  gold_sql: |
+    SELECT COUNT(DISTINCT o_custkey) AS distinct_customers
+    FROM orders
+    WHERE o_orderdate >= DATE '1997-01-01'
+      AND o_orderdate < DATE '1998-01-01'
+  difficulty: medium
+  tags: [distinct, date_range, high_cardinality, sort_key_hostile]
+  notes: >-
+    Distinct over a filtered range, where the filter cannot be pruned because
+    o_orderdate is not a sort-key prefix. The count is far below the 750,000
+    customers in total, so a model that answers with the customer count is
+    obviously wrong; one that forgets DISTINCT is not.
+
+- id: tpch_nl_058
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "Which suppliers have more than 98 line items shipped in 1998? Give
+    the supplier key and the count, ordered by count with the highest first."
+  gold_sql: |
+    SELECT l_suppkey, COUNT(*) AS line_items
+    FROM lineitem
+    WHERE l_shipdate >= DATE '1998-01-01'
+      AND l_shipdate < DATE '1999-01-01'
+    GROUP BY l_suppkey
+    HAVING COUNT(*) > 98
+    ORDER BY line_items DESC, l_suppkey
+  difficulty: hard
+  tags: [group_by, having, date_range, threshold, tiebroken]
+  notes: >-
+    A post-aggregation threshold, which a model must place in HAVING rather than
+    WHERE — the WHERE reading is a syntax error on both engines and so fails
+    loudly, but the reading that filters line items instead of suppliers does
+    not. The threshold is measured, not chosen: 1998 ends on 1 December in this
+    data, so the busiest supplier reaches 104 line items and the mean is 68.
+    98 returns 13 suppliers. A round-looking threshold like 320 would have made
+    the gold empty, and an empty gold scores every model that returns nothing.
+
+- id: tpch_nl_059
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "Across all line items, what are the total quantity, the total extended
+    price, the average discount, and the number of line items?"
+  gold_sql: |
+    SELECT SUM(l_quantity) AS total_quantity,
+           SUM(l_extendedprice) AS total_extended_price,
+           AVG(l_discount) AS average_discount,
+           COUNT(*) AS line_items
+    FROM lineitem
+  difficulty: easy
+  tags: [aggregate, full_scan, control]
+  notes: >-
+    Four aggregates over four columns of the whole table, with nothing to prune
+    and nothing to misread. The suite's cost floor: every arm should score this
+    and read comparable bytes, and an arm that does not has a problem unrelated
+    to grounding.

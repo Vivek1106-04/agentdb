@@ -1,0 +1,216 @@
+# Joins deep enough that the path itself is the difficulty.
+#
+# TPC-H's dimensions are tiny and its facts are enormous — region has 5 rows,
+# nation 25, lineitem 30M — and none of that appears in a CREATE TABLE. These
+# tasks reach from the fact table down to a small dimension, sometimes twice
+# along different paths, so the join order that makes them cheap is decided by
+# statistics the schema-only arm does not have.
+#
+# Inner joins throughout, deliberately. ClickHouse fills non-matching outer-join
+# rows with column defaults where Spark uses NULL, so an outer join is not
+# expressible identically on both engines and SPEC §11.2 puts it out of this
+# suite.
+- id: tpch_nl_046
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "For orders in the building market segment placed before 15 March 1995,
+    which ten orders have the highest revenue from line items shipped after that
+    date? Give the order key and the revenue."
+  gold_sql: |
+    SELECT o_orderkey, SUM(l_extendedprice * (1 - l_discount)) AS revenue
+    FROM customer
+    JOIN orders ON c_custkey = o_custkey
+    JOIN lineitem ON l_orderkey = o_orderkey
+    WHERE c_mktsegment = 'BUILDING'
+      AND o_orderdate < DATE '1995-03-15'
+      AND l_shipdate > DATE '1995-03-15'
+    GROUP BY o_orderkey
+    ORDER BY revenue DESC, o_orderkey
+    LIMIT 10
+  difficulty: hard
+  tags: [join, group_by, top_n, date_range, tpch_q3_derived, tiebroken]
+  notes: >-
+    TPC-H Q3. The same date pivots in opposite directions on two columns — orders
+    before it, shipments after it — and a model that applies one bound to both
+    columns returns an empty or wildly different set. 'BUILDING' is uppercase.
+
+- id: tpch_nl_047
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "Which ten customers generated the most revenue from returned line items
+    on orders placed in the last quarter of 1993? Give the customer name and the revenue."
+  gold_sql: |
+    SELECT c_name, SUM(l_extendedprice * (1 - l_discount)) AS revenue
+    FROM customer
+    JOIN orders ON c_custkey = o_custkey
+    JOIN lineitem ON l_orderkey = o_orderkey
+    WHERE o_orderdate >= DATE '1993-10-01'
+      AND o_orderdate < DATE '1994-01-01'
+      AND l_returnflag = 'R'
+    GROUP BY c_name
+    ORDER BY revenue DESC, c_name
+    LIMIT 10
+  difficulty: hard
+  tags: [join, group_by, top_n, date_range, enum_semantics, tpch_q10_derived, tiebroken]
+  notes: >-
+    TPC-H Q10. "Returned" is l_returnflag = 'R', a single character whose meaning
+    is nowhere in the schema; 'A' also denotes a settled line and is the
+    available wrong answer. Grouping by c_name rather than c_custkey is safe here
+    because TPC-H names embed the key.
+
+- id: tpch_nl_048
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How much revenue came from line items supplied by German suppliers to
+    customers in France, for orders placed in 1995?"
+  gold_sql: |
+    SELECT SUM(l_extendedprice * (1 - l_discount)) AS revenue
+    FROM lineitem
+    JOIN orders ON l_orderkey = o_orderkey
+    JOIN customer ON o_custkey = c_custkey
+    JOIN supplier ON l_suppkey = s_suppkey
+    JOIN nation AS supplier_nation ON s_nationkey = supplier_nation.n_nationkey
+    JOIN nation AS customer_nation ON c_nationkey = customer_nation.n_nationkey
+    WHERE supplier_nation.n_name = 'GERMANY'
+      AND customer_nation.n_name = 'FRANCE'
+      AND o_orderdate >= DATE '1995-01-01'
+      AND o_orderdate < DATE '1996-01-01'
+  difficulty: hard
+  tags: [join, self_join_dimension, aliasing, date_range, tpch_q7_derived]
+  notes: >-
+    The nation table is joined twice along two different paths — once from the
+    supplier, once from the customer — and getting the aliases backwards yields
+    French suppliers shipping to German customers, a different and entirely
+    plausible number. Five joins over the 30M-row fact table; join order decides
+    whether the 25-row dimensions are broadcast or shuffled.
+
+- id: tpch_nl_049
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "For parts whose name contains 'green', what was the total profit by
+    supplier nation and order year? Profit is revenue after discount minus supply
+    cost times quantity. Give the top ten rows by profit."
+  gold_sql: |
+    SELECT n_name,
+           EXTRACT(YEAR FROM o_orderdate) AS order_year,
+           SUM(l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity) AS profit
+    FROM lineitem
+    JOIN orders ON l_orderkey = o_orderkey
+    JOIN part ON l_partkey = p_partkey
+    JOIN supplier ON l_suppkey = s_suppkey
+    JOIN partsupp ON ps_partkey = l_partkey AND ps_suppkey = l_suppkey
+    JOIN nation ON s_nationkey = n_nationkey
+    WHERE p_name LIKE '%green%'
+    GROUP BY n_name, EXTRACT(YEAR FROM o_orderdate)
+    ORDER BY profit DESC, n_name, order_year
+    LIMIT 10
+  difficulty: hard
+  tags: [join, composite_key, group_by, derived_measure, substring_match, tpch_q9_derived, tiebroken]
+  notes: >-
+    TPC-H Q9. partsupp joins on a two-column key, and matching only one of the
+    two columns multiplies rows without raising an error — the row count merely
+    grows. p_name is lowercase in this data, so a model that upper-cases the
+    pattern matches nothing.
+
+- id: tpch_nl_050
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "For line items shipped by mail or ship that were received in 1994,
+    how many arrived late for each of those two modes? Late means the receipt date
+    is after the commit date. Order by ship mode."
+  gold_sql: |
+    SELECT l_shipmode, COUNT(*) AS late_line_items
+    FROM lineitem
+    WHERE l_shipmode IN ('MAIL', 'SHIP')
+      AND l_receiptdate >= DATE '1994-01-01'
+      AND l_receiptdate < DATE '1995-01-01'
+      AND l_receiptdate > l_commitdate
+    GROUP BY l_shipmode
+    ORDER BY l_shipmode
+  difficulty: hard
+  tags: [group_by, enum_semantics, column_comparison, date_range, tpch_q12_derived]
+  notes: >-
+    TPC-H Q12's filter set without its CASE expression. Three predicates on three
+    different date columns of the same row, one of them column-to-column and
+    therefore unprunable. 'SHIP' is a ship mode and also a word in the question's
+    subject, which is the ambiguity the phrasing pins down by naming both modes.
+
+- id: tpch_nl_051
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "What percentage of the revenue from line items shipped in September
+    1995 came from promotional parts? Promotional parts are those whose type
+    starts with PROMO."
+  gold_sql: |
+    SELECT 100.00 * SUM(CASE WHEN p_type LIKE 'PROMO%'
+                             THEN l_extendedprice * (1 - l_discount)
+                             ELSE 0 END)
+           / SUM(l_extendedprice * (1 - l_discount)) AS promo_revenue_percent
+    FROM lineitem
+    JOIN part ON l_partkey = p_partkey
+    WHERE l_shipdate >= DATE '1995-09-01'
+      AND l_shipdate < DATE '1995-10-01'
+  difficulty: hard
+  tags: [join, conditional_aggregate, ratio, date_range, tpch_q14_derived]
+  notes: >-
+    TPC-H Q14. The denominator is all revenue in the window, not promotional
+    revenue, so a model that filters in the WHERE clause instead of inside the
+    CASE returns 100 percent and a confident explanation. p_type is uppercase and
+    PROMO is a prefix, not a substring.
+
+- id: tpch_nl_052
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "For each nation in Asia, what was the revenue from line items where the
+    supplier and the customer are in that same nation, for orders placed in 1994?
+    Order by revenue, highest first."
+  gold_sql: |
+    SELECT n_name, SUM(l_extendedprice * (1 - l_discount)) AS revenue
+    FROM lineitem
+    JOIN orders ON l_orderkey = o_orderkey
+    JOIN customer ON o_custkey = c_custkey
+    JOIN supplier ON l_suppkey = s_suppkey AND s_nationkey = c_nationkey
+    JOIN nation ON s_nationkey = n_nationkey
+    JOIN region ON n_regionkey = r_regionkey
+    WHERE r_name = 'ASIA'
+      AND o_orderdate >= DATE '1994-01-01'
+      AND o_orderdate < DATE '1995-01-01'
+    GROUP BY n_name
+    ORDER BY revenue DESC, n_name
+  difficulty: hard
+  tags: [join, composite_join, group_by, date_range, tpch_q5_derived, tiebroken]
+  notes: >-
+    TPC-H Q5. The supplier-equals-customer-nation condition lives in the join, not
+    the WHERE clause, and dropping it produces every cross-nation pair — a much
+    larger and superficially reasonable set of numbers. Asia has five nations, so
+    the shape of a wrong answer is right.
+
+- id: tpch_nl_053
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "Which five suppliers shipped the greatest total quantity of line items
+    in 1996? Give the supplier name and the quantity."
+  gold_sql: |
+    SELECT s_name, SUM(l_quantity) AS total_quantity
+    FROM lineitem
+    JOIN supplier ON l_suppkey = s_suppkey
+    WHERE l_shipdate >= DATE '1996-01-01'
+      AND l_shipdate < DATE '1997-01-01'
+    GROUP BY s_name
+    ORDER BY total_quantity DESC, s_name
+    LIMIT 5
+  difficulty: medium
+  tags: [join, group_by, top_n, date_range, tiebroken]
+  notes: >-
+    A two-table join with a date filter and a top-N, included as the readable
+    middle of this file. If the deep-join tasks separate the arms and this one
+    does not, the separation is about join depth rather than about grounding, and
+    the report should say so.

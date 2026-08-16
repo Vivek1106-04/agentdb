@@ -2,7 +2,7 @@
 UV ?= uv
 RUN := $(UV) run
 
-.PHONY: help install fmt lint typecheck arch test test-unit test-contract test-e2e check up down seed load-clickbench freeze-gold bench bench-quick bench-quick-dbx report demo clean
+.PHONY: help install fmt lint typecheck arch test test-unit test-contract test-e2e check up down seed load-clickbench load-tpch freeze-gold bench bench-quick bench-quick-dbx report demo clean
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -63,6 +63,13 @@ load-clickbench: ## Load the ClickBench hits table (CLICKBENCH_PARTS=100 for the
 	@$(CH) --query "INSERT INTO hits SELECT * FROM url('https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_{0..$(shell expr $(CLICKBENCH_PARTS) - 1)}.parquet', Parquet) SETTINGS max_http_get_redirects=10, input_format_null_as_default=1"
 	@$(CH) --query "SELECT count() AS rows, formatReadableSize(sum(bytes_on_disk)) AS size FROM system.parts WHERE table='hits' AND active" 2>/dev/null || true
 	@$(CH) --query "SELECT count() FROM hits"
+
+TPCH_SCALE ?= 5  # SF5 is what Databricks samples.tpch holds; changing it breaks the cross-engine suite
+
+load-tpch: ## Load TPC-H at the scale factor samples.tpch ships, so tpch_nl crosses engines
+	@echo "creating the tpch database and tables..."
+	@$(CH) --multiquery < docker/seed/tpch/schema.sql
+	@$(UV) run --extra seed python scripts/load_tpch_clickhouse.py --scale $(TPCH_SCALE)
 
 freeze-gold: ## Verify gold against the loaded data once and commit the hashes
 	$(RUN) python -m agenteval freeze-gold

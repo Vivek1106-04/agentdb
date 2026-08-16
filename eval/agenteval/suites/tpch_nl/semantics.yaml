@@ -1,0 +1,219 @@
+# Questions whose answer turns on a value the schema does not show.
+#
+# Every column below is declared as a plain string or number. What each one
+# actually *contains* — that order status has three states and not two, that
+# account balances go negative, that priorities carry a numeric prefix — is a
+# property of the data. A model that guesses the convention gets zero rows and no
+# error, which is the silent-wrong-answer class this suite is built to catch.
+#
+# These are the tasks where a column-profile arm should separate from a
+# schema-only one on accuracy rather than on bytes.
+- id: tpch_nl_024
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many orders are in each order status? Order the answer by status."
+  gold_sql: |
+    SELECT o_orderstatus, COUNT(*) AS orders
+    FROM orders
+    GROUP BY o_orderstatus
+    ORDER BY o_orderstatus
+  difficulty: easy
+  tags: [group_by, enum_semantics, value_distribution]
+  notes: >-
+    There are three statuses, not two: 'F' and 'O' hold about 3.65M orders each
+    and 'P' holds 191,189. Every model that has seen a fulfilled/open schema
+    assumes the binary. The group-by form cannot get it wrong, which is exactly
+    why it is here — it establishes the ground truth that tpch_nl_025 then makes
+    it possible to miss.
+
+- id: tpch_nl_025
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many orders have not yet been fulfilled?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM orders
+    WHERE o_orderstatus <> 'F'
+  difficulty: hard
+  tags: [count, enum_semantics, value_distribution, plausible_misreading]
+  notes: >-
+    The trap tpch_nl_024 sets up. "Not yet fulfilled" is everything that is not
+    'F', which is 'O' plus 'P' — 3,845,499 orders. A model that reads the domain
+    as binary writes o_orderstatus = 'O' and returns 3,654,310, missing the
+    191,189 partial orders. The answer is wrong by 5% and looks entirely
+    reasonable.
+
+- id: tpch_nl_026
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many customers owe money rather than holding a positive balance?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM customer
+    WHERE c_acctbal < 0
+  difficulty: medium
+  tags: [count, value_distribution, sign_semantics]
+  notes: >-
+    68,166 of 750,000 customers carry a negative balance. Nothing in a DECIMAL
+    declaration says the column goes below zero, and a model that assumes
+    balances are non-negative treats this as a question about zero.
+
+- id: tpch_nl_027
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "Which five customers hold the largest account balances? Give their
+    names and balances."
+  gold_sql: |
+    SELECT c_name, c_acctbal
+    FROM customer
+    ORDER BY c_acctbal DESC, c_name
+    LIMIT 5
+  difficulty: easy
+  tags: [top_n, ordering, tiebroken]
+  notes: >-
+    The paired control for tpch_nl_026: same column, ordinary reading, no trap.
+    Included so a value-distribution result cannot be claimed on a suite where
+    every task about c_acctbal is adversarial.
+
+- id: tpch_nl_028
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many orders were placed at the highest priority?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM orders
+    WHERE o_orderpriority = '1-URGENT'
+  difficulty: hard
+  tags: [count, enum_semantics, value_distribution, plausible_misreading]
+  notes: >-
+    The stored value is '1-URGENT', not 'URGENT' and not 'HIGH'. Two distinct
+    failures are available: writing 'URGENT' returns zero rows, and reading
+    "highest priority" as '2-HIGH' returns a plausible 1,499,192 instead of the
+    correct 1,501,100. The numeric prefix is the whole answer and it is invisible
+    in the DDL.
+
+- id: tpch_nl_029
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many line items were both returned and finalised?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE l_returnflag = 'R'
+      AND l_linestatus = 'F'
+  difficulty: medium
+  tags: [count, enum_semantics, value_distribution, correlated_columns]
+  notes: >-
+    l_returnflag and l_linestatus are not independent. Only four of the six
+    possible pairs occur — A/F, N/F, N/O and R/F — because nothing returned is
+    still open. A model reasoning about the columns separately can produce a
+    filter that is satisfiable in principle and empty in the data.
+
+- id: tpch_nl_030
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "For each combination of return flag and line status, how many line
+    items are there and what is the total quantity? Order by return flag then line status."
+  gold_sql: |
+    SELECT l_returnflag, l_linestatus, COUNT(*) AS line_items, SUM(l_quantity) AS total_quantity
+    FROM lineitem
+    GROUP BY l_returnflag, l_linestatus
+    ORDER BY l_returnflag, l_linestatus
+  difficulty: medium
+  tags: [group_by, aggregate, full_scan, tpch_q1_derived, correlated_columns]
+  notes: >-
+    TPC-H Q1 without its date filter. Returns four rows rather than six, which is
+    the observable form of the correlation tpch_nl_029 tests as a filter. A model
+    that reports six groups has invented two.
+
+- id: tpch_nl_031
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many parts are made by the manufacturer whose identifier is 3?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM part
+    WHERE p_mfgr = 'Manufacturer#3'
+  difficulty: medium
+  tags: [count, string_format, value_distribution]
+  notes: >-
+    p_mfgr holds 'Manufacturer#3', not '3'. The column is a string carrying a
+    formatted label, and the question deliberately says "identifier" to invite
+    the numeric reading. Mixed case matters too: 'MANUFACTURER#3' matches
+    nothing on either engine.
+
+- id: tpch_nl_032
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many line items were shipped with instructions to take the goods
+    back on return?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM lineitem
+    WHERE l_shipinstruct = 'TAKE BACK RETURN'
+  difficulty: medium
+  tags: [count, enum_semantics, multiword_value, value_distribution]
+  notes: >-
+    The value is 'TAKE BACK RETURN' — three words, uppercase, no punctuation. A
+    model that guesses 'TAKE_BACK_RETURN' or 'Take Back Return' returns zero and
+    reports it as a finding. There are four instructions in total and the other
+    three are equally unguessable from the schema.
+
+- id: tpch_nl_033
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many suppliers are based in the United States?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM supplier
+    JOIN nation ON s_nationkey = n_nationkey
+    WHERE n_name = 'UNITED STATES'
+  difficulty: medium
+  tags: [join, enum_semantics, multiword_value, small_dimension]
+  notes: >-
+    'UNITED STATES', not 'USA' or 'United States'. The nation table has 25 rows
+    and three multi-word names, and a model that abbreviates gets an empty result
+    from a join that is otherwise correct.
+
+- id: tpch_nl_034
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "What is the average account balance of customers who hold a positive balance?"
+  gold_sql: |
+    SELECT AVG(c_acctbal) AS average_balance
+    FROM customer
+    WHERE c_acctbal > 0
+  difficulty: medium
+  tags: [average, filter, sign_semantics, value_distribution]
+  notes: >-
+    Restricting to positive balances is stated, so the trap is not the filter but
+    forgetting that it changes the answer materially: 68,166 negative balances
+    drag the unfiltered average down. A model that ignores the qualifier returns
+    a number that is wrong and unremarkable.
+
+- id: tpch_nl_035
+  suite: tpch_nl
+  engine: [clickhouse, databricks]
+  namespace: tpch
+  question: "How many distinct part sizes are there, and what are the smallest and
+    largest?"
+  gold_sql: |
+    SELECT COUNT(DISTINCT p_size) AS distinct_sizes, MIN(p_size) AS smallest, MAX(p_size) AS largest
+    FROM part
+  difficulty: easy
+  tags: [distinct, min_max, value_distribution]
+  notes: >-
+    p_size runs 1 to 50 with all 50 present. An easy task by construction, kept
+    as a calibration point: if an arm misses this one, the failure is in the
+    harness or the model's SQL, not in grounding.

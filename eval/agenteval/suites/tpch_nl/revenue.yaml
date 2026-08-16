@@ -4,7 +4,7 @@
 # the sort key (ClickHouse) decides how much of it gets read.
 - id: tpch_nl_000
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "How many line items are there in total?"
   gold_sql: |
@@ -17,7 +17,7 @@
 
 - id: tpch_nl_001
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "What is the total revenue across all line items, after discounts?"
   gold_sql: |
@@ -32,7 +32,7 @@
 
 - id: tpch_nl_002
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "How many line items were shipped in 1995?"
   gold_sql: |
@@ -49,7 +49,7 @@
 
 - id: tpch_nl_003
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "Break down the line items by return flag and line status, with the
     count and the total quantity in each group."
@@ -67,7 +67,7 @@
 
 - id: tpch_nl_004
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "How many orders were placed at the most urgent priority level?"
   gold_sql: |
@@ -92,7 +92,7 @@
 
 - id: tpch_nl_005
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "What is the average discount given on line items that were returned?"
   gold_sql: |
@@ -107,7 +107,7 @@
 
 - id: tpch_nl_006
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "For each year, how much revenue was shipped, after discounts?"
   gold_sql: |

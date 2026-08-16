@@ -27,9 +27,15 @@ dependencies = [
 # Model providers are optional: importing the harness must never require an API
 # key or a vendor SDK (SPEC §11.3 — adapters are pluggable).
 anthropic = ["anthropic>=0.45"]
-clickhouse = ["clickhouse-connect>=0.8"]
+# The [async] marker pulls aiohttp. The harness only ever calls the async client,
+# so without it the extra installs and then fails at connect time.
+clickhouse = ["clickhouse-connect[async]>=0.8"]
 databricks = ["databricks-sdk>=0.40"]
 mcp = ["mcp>=1.9"]
+# Seeding only. DuckDB is the TPC-H generator for the local ClickHouse half of
+# the cross-engine suite (scripts/load_tpch_clickhouse.py); nothing measured
+# imports it, and no benchmark run needs it installed.
+seed = ["duckdb>=1.1"]
 
 [project.urls]
 Homepage = "https://github.com/vivekgangavarapu/agentdb"

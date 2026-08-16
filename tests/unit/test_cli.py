@@ -400,7 +400,15 @@ def _trace_line() -> str:
 # --------------------------------------------------------------------------
 
 
-async def test_the_default_executor_needs_a_driver_and_a_server() -> None:
+async def test_the_default_executor_needs_a_driver_and_a_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Pointed at a closed port on purpose. Asserting "nothing is listening on the
+    # developer's machine" made this test pass only while `make up` was down, so
+    # loading TPC-H locally broke a unit test that never touched the harness.
+    monkeypatch.setenv("AGENTEVAL_CLICKHOUSE_HOST", "127.0.0.1")
+    monkeypatch.setenv("AGENTEVAL_CLICKHOUSE_PORT", "58199")
+
     with pytest.raises(EngineConnectionError):
         await default_executor()
 

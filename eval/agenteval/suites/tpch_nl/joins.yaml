@@ -3,7 +3,7 @@
 # millions of rows, and nothing in the DDL says so.
 - id: tpch_nl_007
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "How many orders were placed by customers in the automobile market segment?"
   gold_sql: |
@@ -20,7 +20,7 @@
 
 - id: tpch_nl_008
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "Which five nations have the most customers?"
   gold_sql: |
@@ -33,13 +33,13 @@
   difficulty: medium
   tags: [join, group_by, limit, small_dimension]
   notes: >-
-    nation has 25 rows against customer's 150,000. Which side the planner builds
+    nation has 25 rows against customer's 750,000. Which side the planner builds
     decides whether this is a broadcast or a shuffle, and the row counts that
     decide it are statistics, not schema.
 
 - id: tpch_nl_009
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "What was the total revenue, after discounts, from line items shipped
     to customers in Europe during 1995?"
@@ -63,7 +63,7 @@
 
 - id: tpch_nl_010
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "Which parts have the largest total quantity ordered? Give the top ten
     part names with their quantities."
@@ -83,7 +83,7 @@
 
 - id: tpch_nl_011
   suite: tpch_nl
-  engine: [databricks]
+  engine: [clickhouse, databricks]
   namespace: tpch
   question: "How many suppliers are based in the same nation as the customer with
     the largest account balance?"
