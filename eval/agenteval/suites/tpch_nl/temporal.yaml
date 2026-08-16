@@ -140,15 +140,22 @@
   namespace: tpch
   question: "How many days separate the earliest and latest order dates?"
   gold_sql: |
-    SELECT MAX(o_orderdate) - MIN(o_orderdate) AS days_spanned
+    SELECT DATEDIFF(DAY, MIN(o_orderdate), MAX(o_orderdate)) AS days_spanned
     FROM orders
   difficulty: medium
   tags: [min_max, date_arithmetic, scalar]
   notes: >-
-    Date subtraction yields a day count on both engines. The span runs
-    1992-01-01 to 1998-08-02. "How many days separate" is the difference, not the
-    inclusive count of days covered, which is one larger — the classic fencepost,
-    stated in a way that admits only one reading.
+    The span runs 1992-01-01 to 1998-08-02, so the answer is 2405. "How many days
+    separate" is the difference, not the inclusive count of days covered, which
+    is one larger — the classic fencepost, stated in a way that admits only one
+    reading.
+
+    DATEDIFF with an unquoted DAY unit, not subtraction, and not the quoted
+    'day' ClickHouse also accepts. Measured: `MAX(o_orderdate) - MIN(o_orderdate)`
+    returns 2405 on ClickHouse but INTERVAL '2405' DAY on Databricks, so gold
+    written that way would grade a Databricks model that answered 2405 as wrong.
+    `date_diff('day', ...)` is the mirror-image trap — ClickHouse takes it and
+    Databricks rejects the quoted unit outright.
 
 - id: tpch_nl_044
   suite: tpch_nl

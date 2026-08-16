@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import Enum
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
@@ -571,3 +572,90 @@ async def test_a_history_entry_the_sdk_cannot_render_as_a_mapping_is_skipped() -
     )
 
     assert await client.query_info("sid-1") is None
+
+
+# --------------------------------------------------------------------------
+# cells arrive as text, and the grader compares numbers
+# --------------------------------------------------------------------------
+
+
+def _typed_response(types: list[Any], row: list[Any]) -> SimpleNamespace:
+    """A response whose manifest declares a type per column, as the API's does."""
+    return _response(
+        manifest=SimpleNamespace(
+            schema=SimpleNamespace(
+                columns=[
+                    SimpleNamespace(name=f"c{index}", type_name=type_name)
+                    for index, type_name in enumerate(types)
+                ]
+            ),
+            total_row_count=1,
+            total_byte_count=64,
+        ),
+        result=SimpleNamespace(data_array=[row]),
+    )
+
+
+async def _cells(types: list[Any], row: list[Any]) -> tuple[Any, ...]:
+    client = StatementExecutionClient(
+        api=_Api(_typed_response(types, row)),
+        warehouse_id="abc123",
+        catalog="samples",
+        schema="tpch",
+        parameter=_parameter,
+    )
+    result = await client.statement("SELECT 1", parameters={})
+    return result.rows[0]
+
+
+async def test_numbers_are_typed_from_the_manifest_not_left_as_text() -> None:
+    # The API returns every cell as a string; the grader normalizes numbers to
+    # float but leaves strings alone, so uncoerced cells compare by spelling.
+    assert await _cells(["LONG", "DOUBLE", "DECIMAL"], ["42", "1.5", "33199131663.4780"]) == (
+        42,
+        1.5,
+        33199131663.478,
+    )
+
+
+async def test_two_spellings_of_one_number_compare_equal_once_typed() -> None:
+    trailing_zero = await _cells(["DECIMAL"], ["33199131663.4780"])
+    plain = await _cells(["DECIMAL"], ["33199131663.478"])
+
+    assert trailing_zero == plain
+
+
+async def test_text_columns_holding_digits_stay_text() -> None:
+    # An order id is not a number just because it is spelled with digits.
+    assert await _cells(["STRING", "DATE"], ["007", "1995-01-01"]) == ("007", "1995-01-01")
+
+
+async def test_booleans_are_read_from_the_word() -> None:
+    assert await _cells(["BOOLEAN", "BOOLEAN"], ["true", "false"]) == (True, False)
+
+
+async def test_a_cell_its_declared_type_cannot_parse_is_passed_through() -> None:
+    # Losing a whole run to one odd value would be worse than one odd value.
+    assert await _cells(["LONG"], ["not-a-number"]) == ("not-a-number",)
+
+
+async def test_nulls_and_untyped_columns_survive_untouched() -> None:
+    assert await _cells(["LONG", ""], [None, "left alone"]) == (None, "left alone")
+
+
+async def test_the_databricks_executor_holds_nothing_to_release() -> None:
+    executor = DatabricksExecutor(client=FakeClient())
+
+    await executor.aclose()  # the SDK owns its session; closing must still be safe
+
+
+class _TypeName(Enum):
+    """Shaped like the SDK's ColumnInfoTypeName, whose str() is not the bare name."""
+
+    LONG = "LONG"
+
+
+async def test_the_sdk_type_enum_is_read_by_value_not_by_str() -> None:
+    # str(ColumnInfoTypeName.LONG) is 'ColumnInfoTypeName.LONG'. Matching on that
+    # silently coerces nothing, which is how this fix first shipped doing nothing.
+    assert await _cells([_TypeName.LONG], ["42"]) == (42,)

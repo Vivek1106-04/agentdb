@@ -11,6 +11,7 @@ the numbers were computed against — which is the failure it exists to catch.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
@@ -18,7 +19,7 @@ import yaml
 from agenteval.execution import QueryExecutor
 from agenteval.gold import GoldError, resolve_gold
 from agenteval.scorer import has_top_level_order_by, result_hash
-from agenteval.tasks import GOLD_LOCK_NAME, TaskSuite
+from agenteval.tasks import GOLD_LOCK_NAME, TaskSuite, gold_sql_key
 
 ENGINES = ("clickhouse", "databricks")
 """Engines a flat, engine-less hash is taken to cover when the file is upgraded."""
@@ -48,7 +49,12 @@ async def compute_gold_hashes(executor: QueryExecutor, suite: TaskSuite) -> dict
 
 
 def write_gold_lock(
-    directory: Path, suite_name: str, hashes: dict[str, str], *, engine: str
+    directory: Path,
+    suite_name: str,
+    hashes: dict[str, str],
+    *,
+    engine: str,
+    fingerprints: Mapping[str, str] | None = None,
 ) -> Path:
     """Merge ``hashes`` into the sidecar under ``engine``, sorted for a readable diff.
 
@@ -56,11 +62,17 @@ def write_gold_lock(
     what was frozen on the other. A cross-engine suite is frozen twice, once per
     engine, and both records have to survive — otherwise the second freeze
     silently disarms drift detection on the first engine.
+
+    ``fingerprints`` records which gold SQL each hash was taken against, so a
+    later edit to a question invalidates its own hash instead of being reported
+    as drifted data (see :func:`agenteval.tasks.gold_sql_fingerprint`).
     """
     path = directory / GOLD_LOCK_NAME
     merged = _existing(path)
     for task_id, digest in hashes.items():
         merged.setdefault(task_id, {})[engine] = digest
+        if fingerprints and task_id in fingerprints:
+            merged[task_id][gold_sql_key(engine)] = fingerprints[task_id]
 
     body = yaml.safe_dump(
         {

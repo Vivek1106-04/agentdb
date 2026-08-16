@@ -39,6 +39,10 @@ class FakeClient:
     results: list[FakeResult | Exception] = field(default_factory=list)
     queries: list[str] = field(default_factory=list)
     settings: list[Mapping[str, Any]] = field(default_factory=list)
+    closed: bool = False
+
+    async def close(self) -> None:
+        self.closed = True
 
     async def query(self, query: str, *, settings: Mapping[str, Any]) -> FakeResult:
         self.queries.append(query)
@@ -266,3 +270,13 @@ async def test_an_unreachable_server_says_so() -> None:
 
     with pytest.raises(EngineConnectionError, match="Is `make up` running"):
         await build_client(ClickHouseTarget(), importer=lambda _: module)
+
+
+async def test_closing_the_executor_closes_the_driver_pool() -> None:
+    # Every run used to leak its connection pool: MCP sessions were closed and
+    # engines were not, so each run ended with an unclosed-session error.
+    executor, client = _executor()
+
+    await executor.aclose()
+
+    assert client.closed

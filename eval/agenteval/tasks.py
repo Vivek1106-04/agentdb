@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
@@ -29,6 +30,10 @@ _REQUIRED_FIELDS = ("id", "suite", "engine", "question", "gold_sql")
 _ALLOWED_FIELDS = frozenset(
     {*_REQUIRED_FIELDS, "difficulty", "tags", "gold_result_hash", "notes", "namespace"}
 )
+GOLD_SQL_KEY_SUFFIX = "_sql"
+"""Suffix marking a lock-entry key as a gold-SQL fingerprint for one engine
+(``clickhouse_sql``) rather than the name of an engine."""
+
 GOLD_LOCK_NAME = "gold.lock.yaml"
 """Committed gold hashes live in one sidecar per suite, not scattered through the
 task files. A reviewer auditing gold drift then reads a single diff, and
@@ -224,8 +229,52 @@ def _apply_gold_lock(tasks: Sequence[Task], lock_path: Path) -> list[Task]:
                 f"task {task.id!r} has a gold_result_hash in both its file and "
                 f"{lock_path.name}; the lock file is the one source of truth"
             )
-        locked.append(replace(task, gold_result_hashes=_parse_hashes(task.id, entry)))
+        hashes = _parse_hashes(task.id, entry)
+        locked.append(replace(task, gold_result_hashes=_fresh_hashes(task, entry, hashes)))
     return locked
+
+
+def gold_sql_fingerprint(gold_sql: str) -> str:
+    """Identify the question a committed hash was taken against.
+
+    Without this the lock records only "task id produced this hash", so editing a
+    task's ``gold_sql`` makes the next freeze report drift — the hash of the old
+    question against the result of the new one — and the only way past it is to
+    hand-delete the entry. That conflates the two things the lock exists to tell
+    apart: data that changed underneath a fixed question, which must fail loudly,
+    and a question the author deliberately rewrote, which must not.
+    """
+    return "sha256:" + sha256(gold_sql.strip().encode("utf-8")).hexdigest()
+
+
+def gold_sql_key(engine: str) -> str:
+    """Where one engine's gold-SQL fingerprint lives in a lock entry.
+
+    Per engine, not per task, because a cross-engine suite is frozen once per
+    engine and those freezes happen at different times. A single shared
+    fingerprint would be rewritten by whichever engine was frozen last, silently
+    re-validating the other engine's stale hash — which is exactly the drift the
+    lock exists to catch.
+    """
+    return f"{engine}{GOLD_SQL_KEY_SUFFIX}"
+
+
+def _fresh_hashes(
+    task: Task, entry: object, hashes: tuple[tuple[Engine, str], ...]
+) -> tuple[tuple[Engine, str], ...]:
+    """Drop any engine's hash that was frozen against different SQL than the task now has.
+
+    An engine with no committed fingerprint predates them and is trusted, so
+    older lock files keep working exactly as before.
+    """
+    if not isinstance(entry, Mapping):
+        return hashes
+    current = gold_sql_fingerprint(task.gold_sql)
+    return tuple(
+        (engine, digest)
+        for engine, digest in hashes
+        if str(entry.get(gold_sql_key(engine), current)) == current
+    )
 
 
 def _parse_hashes(task_id: object, raw: object) -> tuple[tuple[Engine, str], ...]:
@@ -243,6 +292,8 @@ def _parse_hashes(task_id: object, raw: object) -> tuple[tuple[Engine, str], ...
         hashes: list[tuple[Engine, str]] = []
         for name, digest in raw.items():
             engine = str(name)
+            if engine.endswith(GOLD_SQL_KEY_SUFFIX):
+                continue
             if engine not in _ENGINES:
                 raise TaskLoadError(
                     f"task {task_id!r} commits a gold hash for unknown engine {engine!r}; "

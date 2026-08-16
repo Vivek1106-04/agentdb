@@ -62,6 +62,31 @@ because both engines derive a product's scale from its operands' and a width
 mismatch would make `SUM(l_extendedprice * (1 - l_discount))` round differently
 on the two engines.
 
+## How far the two engines actually agree
+
+Gold is hashed per engine, so the suite never *needed* the two to agree. They
+very nearly do: **55 of 60** gold results hash identically on ClickHouse and
+Databricks.
+
+That number is only meaningful because the harness types Databricks cells from
+the response manifest. The Statement Execution API returns every cell as text,
+and the grader compares strings by spelling — so before that coercion,
+`33199131663.478` and `33199131663.4780` were the same revenue and a different
+answer.
+
+The five that still differ are all aggregate precision, not disagreement:
+
+| task | shape | ClickHouse | Databricks |
+|---|---|---|---|
+| `005`, `059` | `AVG(l_discount)` | `0.0499958481590062` | `0.049996` |
+| `022` | `AVG(l_quantity)` | full float | 6 decimal places |
+| `051` | promo revenue ratio | `16.5178927752155` | `16.517893` |
+| `056` | `SELECT *` with decimals | typed | fixed scale |
+
+Databricks returns `AVG` over `DECIMAL(18,2)` as a `DECIMAL` with six decimal
+places; ClickHouse returns a full-width float. Same value, different width —
+which is exactly what per-engine gold exists to absorb.
+
 ## Two engine differences the suite works around rather than hides
 
 **Nullability.** Delta declares every column nullable; the ClickHouse DDL

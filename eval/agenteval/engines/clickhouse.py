@@ -46,9 +46,11 @@ class QueryResult(Protocol):
 
 
 class ClickHouseClient(Protocol):
-    """The one client method the harness uses, so the driver stays swappable."""
+    """The two client methods the harness uses, so the driver stays swappable."""
 
     async def query(self, query: str, *, settings: Mapping[str, Any]) -> QueryResult: ...
+
+    async def close(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +117,10 @@ class ClickHouseExecutor:
             rows_read=_summary_int(result.summary, "read_rows"),
             bytes_read=_summary_int(result.summary, "read_bytes"),
         )
+
+    async def aclose(self) -> None:
+        """Close the driver's connection pool."""
+        await self.client.close()
 
     async def _query(self, sql: str) -> QueryResult:
         return await self.client.query(sql, settings=self._settings())

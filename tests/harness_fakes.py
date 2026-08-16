@@ -67,6 +67,8 @@ class FakeExecutor:
     outcomes: list[EmittedQuery] = field(default_factory=list)
     executed: list[str] = field(default_factory=list)
     namespaces: list[str] = field(default_factory=list)
+    closed: bool = False
+    """Set by :meth:`aclose`, so a test can assert the run released its engine."""
 
     async def schema_text(self, namespace: str) -> str:
         self.namespaces.append(namespace)
@@ -76,6 +78,9 @@ class FakeExecutor:
         self.executed.append(sql)
         outcome = self.outcomes.pop(0) if self.outcomes else OK
         return replace(outcome, sql=sql)
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 class ScriptExhaustedError(AssertionError):

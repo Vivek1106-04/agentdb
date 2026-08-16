@@ -169,6 +169,54 @@ class StatementResponse:
     bytes_read: int | None = None
 
 
+_INTEGER_TYPES = frozenset({"BYTE", "SHORT", "INT", "LONG"})
+_REAL_TYPES = frozenset({"FLOAT", "DOUBLE", "DECIMAL"})
+
+
+def _type_name(raw: object) -> str:
+    """The column's declared type as a bare name.
+
+    The SDK hands back a ``ColumnInfoTypeName`` enum whose ``str()`` is
+    ``'ColumnInfoTypeName.LONG'``, not ``'LONG'`` — so reading it as a string
+    matches nothing and every cell silently stays text, which is the failure this
+    coercion exists to prevent. The enum's ``value`` is the bare name.
+    """
+    if raw is None:
+        return ""
+    return str(getattr(raw, "value", raw))
+
+
+def _coerce(value: object, type_name: str) -> object:
+    """Turn one API cell into the value its column says it is.
+
+    The Statement Execution API returns **every** cell as text, including
+    numbers. The grader normalizes int, float and Decimal to float but leaves a
+    string a string, so without this the Databricks half of a run compares
+    numbers by their spelling: `33199131663.478` and `33199131663.4780` are the
+    same revenue and different strings, and the second is graded wrong.
+
+    Typed from the response manifest rather than guessed from the text, so a
+    genuinely textual column that happens to hold digits — an order id, a phone
+    number — stays text and keeps comparing as one.
+
+    A cell the declared type cannot parse is passed through untouched. A
+    benchmark that crashed on one odd value would lose the whole run to it.
+    """
+    if value is None or not isinstance(value, str):
+        return value
+    name = type_name.upper()
+    try:
+        if name in _INTEGER_TYPES:
+            return int(value)
+        if name in _REAL_TYPES:
+            return float(value)
+        if name == "BOOLEAN":
+            return value.strip().lower() == "true"
+    except ValueError:
+        return value
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class StatementExecutionClient:
     """The Statement Execution API behind the executor's client protocol.
@@ -245,11 +293,17 @@ class StatementExecutionClient:
         manifest = getattr(response, "manifest", None)
         schema_info = getattr(manifest, "schema", None) if manifest is not None else None
         result = getattr(response, "result", None)
+        schema_columns = tuple(getattr(schema_info, "columns", None) or ())
+        types = tuple(_type_name(getattr(column, "type_name", None)) for column in schema_columns)
         return StatementResponse(
-            columns=tuple(
-                str(column.name) for column in getattr(schema_info, "columns", None) or ()
+            columns=tuple(str(column.name) for column in schema_columns),
+            rows=tuple(
+                tuple(
+                    _coerce(cell, types[index] if index < len(types) else "")
+                    for index, cell in enumerate(row)
+                )
+                for row in (getattr(result, "data_array", None) or ())
             ),
-            rows=tuple(tuple(row) for row in (getattr(result, "data_array", None) or ())),
             statement_id=getattr(response, "statement_id", None),
             rows_read=getattr(manifest, "total_row_count", None) if manifest is not None else None,
             bytes_read=getattr(manifest, "total_byte_count", None)

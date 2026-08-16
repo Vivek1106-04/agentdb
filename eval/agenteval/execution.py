@@ -44,3 +44,13 @@ class QueryExecutor(Protocol):
         measurement, not an exception. Connection-level faults may still raise.
         """
         ...
+
+    async def aclose(self) -> None:
+        """Release whatever the executor holds open.
+
+        Every run used to leak its connection pool — MCP sessions were closed and
+        engines were not — which printed an unclosed-session error over the end of
+        each run. Implementations that hold nothing may do nothing, but they must
+        say so rather than leave the caller guessing.
+        """
+        ...

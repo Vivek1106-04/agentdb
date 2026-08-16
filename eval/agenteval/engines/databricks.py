@@ -163,6 +163,16 @@ class DatabricksExecutor:
             files_pruned=files_pruned,
         )
 
+    async def aclose(self) -> None:
+        """Nothing to release.
+
+        The Statement Execution API is called per statement through the SDK,
+        which owns its own HTTP session and outlives no run of ours. Stated
+        rather than omitted, so a reader does not have to check whether this was
+        forgotten.
+        """
+        return
+
     async def _pruning(self, statement_id: str | None) -> tuple[int | None, int | None]:
         """What the warehouse measured itself pruning, if it will say.
 

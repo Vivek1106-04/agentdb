@@ -6,7 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from agenteval.tasks import Task, TaskLoadError, TaskSuite, load_suite, parse_task
+from agenteval.tasks import (
+    GOLD_LOCK_NAME,
+    Task,
+    TaskLoadError,
+    TaskSuite,
+    gold_sql_fingerprint,
+    load_suite,
+    parse_task,
+)
 
 VALID = {
     "id": "clickbench_nl_017",
@@ -229,3 +237,84 @@ def test_suite_lookup_by_id() -> None:
 def test_suite_lookup_reports_a_missing_id() -> None:
     with pytest.raises(KeyError, match="no task 't9'"):
         _suite().by_id("t9")
+
+
+# --------------------------------------------------------------------------
+# a committed hash belongs to the question it was taken against
+# --------------------------------------------------------------------------
+
+
+def _locked_suite(tmp_path: Path, gold_sql: str, lock: str) -> Task:
+    (tmp_path / "s.yaml").write_text(
+        f"- id: t1\n  suite: s\n  engine: [clickhouse]\n  question: q\n  gold_sql: {gold_sql}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / GOLD_LOCK_NAME).write_text(lock, encoding="utf-8")
+    return load_suite(tmp_path).by_id("t1")
+
+
+def test_a_hash_frozen_against_the_same_sql_is_attached(tmp_path: Path) -> None:
+    fingerprint = gold_sql_fingerprint("SELECT 1")
+    task = _locked_suite(
+        tmp_path, "SELECT 1", f"t1:\n  clickhouse: sha256:frozen\n  clickhouse_sql: {fingerprint}\n"
+    )
+
+    assert task.gold_hash_for("clickhouse") == "sha256:frozen"
+
+
+def test_a_hash_frozen_against_different_sql_is_dropped(tmp_path: Path) -> None:
+    # Editing a question must not be reported as drifted data. Before the
+    # fingerprint the only way past that was to hand-delete the lock entry.
+    stale = gold_sql_fingerprint("SELECT 2")
+    task = _locked_suite(
+        tmp_path, "SELECT 1", f"t1:\n  clickhouse: sha256:frozen\n  clickhouse_sql: {stale}\n"
+    )
+
+    assert task.gold_result_hashes == ()
+
+
+def test_a_lock_written_before_fingerprints_still_applies(tmp_path: Path) -> None:
+    task = _locked_suite(tmp_path, "SELECT 1", "t1:\n  clickhouse: sha256:frozen\n")
+
+    assert task.gold_hash_for("clickhouse") == "sha256:frozen"
+
+
+def test_the_fingerprint_ignores_surrounding_whitespace() -> None:
+    assert gold_sql_fingerprint("SELECT 1") == gold_sql_fingerprint("  SELECT 1\n")
+
+
+def test_a_flat_single_engine_lock_entry_carries_no_fingerprint(tmp_path: Path) -> None:
+    # The oldest lock form is a bare hash, with nowhere to record the SQL.
+    task = _locked_suite(tmp_path, "SELECT 1", "t1: sha256:frozen\n")
+
+    assert task.gold_hash_for("clickhouse") == "sha256:frozen"
+
+
+def test_one_engines_fingerprint_does_not_revalidate_anothers_stale_hash(tmp_path: Path) -> None:
+    # A cross-engine suite is frozen once per engine, at different times. With a
+    # single shared fingerprint, re-freezing ClickHouse after a question was
+    # rewritten stamped the new SQL over the entry and silently re-validated the
+    # Databricks hash still held from the old question.
+    (tmp_path / "s.yaml").write_text(
+        "- id: t1\n"
+        "  suite: s\n"
+        "  engine: [clickhouse, databricks]\n"
+        "  question: q\n"
+        "  gold_sql: SELECT 1\n",
+        encoding="utf-8",
+    )
+    current = gold_sql_fingerprint("SELECT 1")
+    stale = gold_sql_fingerprint("SELECT 2")
+    (tmp_path / GOLD_LOCK_NAME).write_text(
+        "t1:\n"
+        "  clickhouse: sha256:fresh\n"
+        f"  clickhouse_sql: {current}\n"
+        "  databricks: sha256:stale\n"
+        f"  databricks_sql: {stale}\n",
+        encoding="utf-8",
+    )
+
+    task = load_suite(tmp_path).by_id("t1")
+
+    assert task.gold_hash_for("clickhouse") == "sha256:fresh"
+    assert task.gold_hash_for("databricks") is None

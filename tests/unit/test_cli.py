@@ -13,7 +13,6 @@ from agenteval.__main__ import EXIT_OK, EXIT_USAGE, main
 from agenteval.cli import (
     DEFAULT_MODEL,
     QUICK_TASKS,
-    SUITES_DIR,
     BenchOptions,
     CliError,
     FreezeOptions,
@@ -43,6 +42,7 @@ from agenteval.models.tools import ToolResponse
 from agenteval.report import ReportError
 from agenteval.runner import Cell
 from agenteval.scorer import Score
+from agenteval.suites import SUITES_DIR
 from agenteval.systems.base import SystemUnderTest
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
 from agenteval.systems.providers import ProviderConfig

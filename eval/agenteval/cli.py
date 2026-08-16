@@ -53,7 +53,7 @@ from agenteval.systems.plan_aware import PlanAdvisor, PlanAwareSystem
 from agenteval.systems.providers import ProviderConfig, load_provider, load_provider_configs
 from agenteval.systems.raw_schema import ARM_NAME as BASELINE_ARM
 from agenteval.systems.raw_schema import RawSchemaSystem
-from agenteval.tasks import Engine
+from agenteval.tasks import Engine, gold_sql_fingerprint
 from agenteval.traces import TraceWriter
 
 DEFAULT_SUITE = "clickbench_nl"
@@ -341,6 +341,7 @@ async def run_bench(
     finally:
         for session in sessions:
             await session.close()
+        await executor.aclose()
 
     for line in summarize(cells):
         write(line)
@@ -364,8 +365,17 @@ async def run_freeze(
     """Verify every gold query against the live data and commit the hashes."""
     suite = load_builtin(options.suite)
     executor = await executor_factory()
-    hashes = await compute_gold_hashes(executor, suite)
-    path = write_gold_lock(SUITES_DIR / options.suite, suite.name, hashes, engine=options.engine)
+    try:
+        hashes = await compute_gold_hashes(executor, suite)
+    finally:
+        await executor.aclose()
+    path = write_gold_lock(
+        SUITES_DIR / options.suite,
+        suite.name,
+        hashes,
+        engine=options.engine,
+        fingerprints={task.id: gold_sql_fingerprint(task.gold_sql) for task in suite},
+    )
     write(f"froze {len(hashes)} gold result(s) -> {path}")
     return path
 
