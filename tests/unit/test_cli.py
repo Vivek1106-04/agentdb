@@ -42,7 +42,6 @@ from agenteval.models.tools import ToolResponse
 from agenteval.report import ReportError
 from agenteval.runner import Cell
 from agenteval.scorer import Score
-from agenteval.suites import SUITES_DIR
 from agenteval.systems.base import SystemUnderTest
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
 from agenteval.systems.providers import ProviderConfig
@@ -304,7 +303,38 @@ def test_the_summary_reports_execution_accuracy_per_arm() -> None:
 # --------------------------------------------------------------------------
 
 
-async def _run(options: BenchOptions, lines: list[str]) -> tuple[Cell, ...]:
+def _fixture_suite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the shipped-suite loader at a throwaway suite with no committed gold.
+
+    These tests are about run plumbing — traces written, arms constructed, limits
+    applied — and used to read the real clickbench_nl. Once that suite had its
+    gold hashes frozen, a FakeExecutor's canned rows were compared against
+    genuine ClickBench results and the runs failed on gold drift, which was the
+    drift check doing its job on a fixture that was never meant to satisfy it.
+    """
+    suite = tmp_path / "suites" / "clickbench_nl"
+    suite.mkdir(parents=True)
+    (suite / "s.yaml").write_text(
+        "".join(
+            f"- id: clickbench_nl_{n:03d}\n"
+            "  suite: clickbench_nl\n"
+            "  engine: [clickhouse]\n"
+            f"  question: question {n}\n"
+            "  gold_sql: SELECT count() FROM hits\n"
+            for n in range(4)
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("agenteval.suites.SUITES_DIR", tmp_path / "suites")
+
+
+async def _run(
+    options: BenchOptions,
+    lines: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Cell, ...]:
+    _fixture_suite(tmp_path, monkeypatch)
     executor = FakeExecutor()
     client = ScriptedModelClient(replies=[GOOD_REPLY] * 40)
 
@@ -324,10 +354,14 @@ async def _run(options: BenchOptions, lines: list[str]) -> tuple[Cell, ...]:
     )
 
 
-async def test_a_run_writes_traces_and_reports_a_number(tmp_path: Path) -> None:
+async def test_a_run_writes_traces_and_reports_a_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     lines: list[str] = []
 
-    cells = await _run(BenchOptions(seeds=(0,), limit=2, out=tmp_path), lines)
+    cells = await _run(
+        BenchOptions(seeds=(0,), limit=2, out=tmp_path), lines, tmp_path, monkeypatch
+    )
 
     assert len(cells) == 2
     assert any("EX" in line for line in lines)
@@ -336,16 +370,22 @@ async def test_a_run_writes_traces_and_reports_a_number(tmp_path: Path) -> None:
     assert len(read_records(written[0])) == 2
 
 
-async def test_both_arms_run_in_one_pass(tmp_path: Path) -> None:
+async def test_both_arms_run_in_one_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cells = await _run(
-        BenchOptions(arms=(ARM_NAME, ORACLE_ARM), seeds=(0,), limit=1, out=tmp_path), []
+        BenchOptions(arms=(ARM_NAME, ORACLE_ARM), seeds=(0,), limit=1, out=tmp_path),
+        [],
+        tmp_path,
+        monkeypatch,
     )
 
     assert {cell.system for cell in cells} == {ARM_NAME, ORACLE_ARM}
 
 
-async def test_the_limit_is_applied_to_the_suite(tmp_path: Path) -> None:
-    assert len(await _run(BenchOptions(seeds=(0,), limit=1, out=tmp_path), [])) == 1
+async def test_the_limit_is_applied_to_the_suite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cells = await _run(BenchOptions(seeds=(0,), limit=1, out=tmp_path), [], tmp_path, monkeypatch)
+    assert len(cells) == 1
 
 
 def test_the_report_command_writes_markdown_from_traces(tmp_path: Path) -> None:
@@ -559,8 +599,8 @@ async def test_the_freeze_command_writes_a_lock_beside_the_suite(
     from agenteval.cli import FreezeOptions as _FreezeOptions
     from agenteval.cli import run_freeze
 
-    monkeypatch.setattr("agenteval.cli.SUITES_DIR", tmp_path)
-    (tmp_path / "clickbench_nl").mkdir()
+    _fixture_suite(tmp_path, monkeypatch)
+    monkeypatch.setattr("agenteval.cli.SUITES_DIR", tmp_path / "suites")
     executor = FakeExecutor()
     lines: list[str] = []
 
@@ -572,12 +612,12 @@ async def test_the_freeze_command_writes_a_lock_beside_the_suite(
         _FreezeOptions(suite="clickbench_nl"), executor_factory=make_executor, write=lines.append
     )
 
-    # Assert — one hash per shipped ClickHouse task. The count is derived rather
-    # than written down: hardcoding it made authoring a task fail a test that is
-    # about the freeze command, not about how many questions the suite asks.
-    expected = len(load_suite(SUITES_DIR / "clickbench_nl").for_engine("clickhouse"))
+    # Assert — one hash per ClickHouse task in the suite, and a fingerprint of
+    # the SQL each was taken against, so a later edit invalidates its own hash.
+    expected = len(load_suite(tmp_path / "suites" / "clickbench_nl").for_engine("clickhouse"))
     assert path.name == "gold.lock.yaml"
     assert f"froze {expected} gold result(s)" in lines[0]
+    assert "clickhouse_sql:" in path.read_text(encoding="utf-8")
 
 
 @dataclass

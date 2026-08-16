@@ -1,0 +1,363 @@
+# Authored extensions: text handling, time bucketing, and the shapes that decide
+# how much work an answer costs.
+#
+# The last of the four authored files. Where coded.yaml is about values the
+# schema hides and layout.yaml is about the sort key, this one is about the work
+# itself — derived grouping keys, distinct counts over wide domains, and
+# predicates that no index can serve however they are written.
+- id: clickbench_nl_085
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits occurred on each day of the month? Order by the day."
+  gold_sql: |
+    SELECT EXTRACT(DAY FROM EventDate) AS d, COUNT(*) AS c
+    FROM hits
+    GROUP BY EXTRACT(DAY FROM EventDate)
+    ORDER BY d
+  difficulty: medium
+  tags: [group_by, date_part, function_wrapped_predicate, sort_key_second_column]
+  notes: >-
+    Grouping by a function of EventDate rather than by EventDate itself. The
+    column is the second sort-key element, so grouping by it directly would
+    follow the physical order; wrapping it in EXTRACT throws that away for a
+    result that is nearly the same shape.
+
+- id: clickbench_nl_086
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits fell in each hour of 15 July 2013, for counter 62? Order by hour."
+  gold_sql: |
+    SELECT EXTRACT(HOUR FROM EventTime) AS h, COUNT(*) AS c
+    FROM hits
+    WHERE CounterID = 62 AND EventDate = '2013-07-15'
+    GROUP BY EXTRACT(HOUR FROM EventTime)
+    ORDER BY h
+  difficulty: medium
+  tags: [group_by, date_part, sort_key_prefix, time_series]
+  notes: >-
+    A fully-constrained sort-key prefix and a cheap derived grouping key on top,
+    which is the shape that should be fastest in the whole suite. Its pair is
+    clickbench_nl_053, the same decomposition with nothing constrained.
+
+- id: clickbench_nl_087
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many distinct URLs were visited?"
+  gold_sql: |
+    SELECT COUNT(DISTINCT URL)
+    FROM hits
+  difficulty: medium
+  tags: [distinct, very_high_cardinality, full_scan]
+  notes: >-
+    A distinct count over a long string column with an enormous domain, which is
+    the most memory-hungry single-value question available here. Nothing prunes
+    and nothing bounds the state except the cardinality itself.
+
+- id: clickbench_nl_088
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many distinct titles were seen on hits that had a title?"
+  gold_sql: |
+    SELECT COUNT(DISTINCT Title)
+    FROM hits
+    WHERE Title <> ''
+  difficulty: medium
+  tags: [distinct, very_high_cardinality, empty_string_sentinel]
+  notes: >-
+    The Title counterpart to clickbench_nl_087, with the sentinel excluded. The
+    pair is worth having because the two columns differ in length and repetition,
+    so the same question costs materially different amounts.
+
+- id: clickbench_nl_089
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "What is the longest URL recorded, measured in characters?"
+  gold_sql: |
+    SELECT MAX(length(URL))
+    FROM hits
+  difficulty: easy
+  tags: [aggregate, function_wrapped_predicate, full_scan]
+  notes: >-
+    Length in characters, computed per row before it can be maximised, so the
+    whole URL column is decompressed. The answer is a number, not the URL — a
+    model that returns the string is answering a different question.
+
+- id: clickbench_nl_090
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits have a URL that starts with 'http://'?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE URL LIKE 'http://%'
+  difficulty: medium
+  tags: [count, prefix_match, full_scan]
+  notes: >-
+    An anchored prefix rather than the unanchored '%google%' of
+    clickbench_nl_020. The distinction matters to cost on some engines and to
+    correctness always: a model that drops the anchor also matches URLs that
+    merely mention the scheme in a query string.
+
+- id: clickbench_nl_091
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits have a URL containing 'yandex', ignoring case?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE lower(URL) LIKE '%yandex%'
+  difficulty: medium
+  tags: [count, substring_match, case_insensitive, function_wrapped_predicate]
+  notes: >-
+    Case-insensitivity is stated, which makes this the deliberate opposite of
+    clickbench_nl_020 — there the question is case-sensitive as written and a
+    model that lowercases is wrong. Two questions that differ only in that
+    qualifier, so a system cannot score both by always picking one convention.
+
+- id: clickbench_nl_092
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which ten counters recorded the most hits? Give the counter and the count."
+  gold_sql: |
+    SELECT CounterID, COUNT(*) AS c
+    FROM hits
+    GROUP BY CounterID
+    ORDER BY c DESC, CounterID
+    LIMIT 10
+  difficulty: easy
+  tags: [group_by, top_n, sort_key_prefix, tiebroken]
+  notes: >-
+    Grouping by the leading sort-key column, so the groups arrive in physical
+    order and the aggregation never has to hold many at once. The cheap
+    counterpart to clickbench_nl_033's grouping by URL.
+
+- id: clickbench_nl_093
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "For counter 62, how many distinct URLs were visited in July 2013?"
+  gold_sql: |
+    SELECT COUNT(DISTINCT URL)
+    FROM hits
+    WHERE CounterID = 62
+      AND EventDate >= '2013-07-01' AND EventDate <= '2013-07-31'
+  difficulty: medium
+  tags: [distinct, sort_key_prefix, date_range, high_cardinality]
+  notes: >-
+    An expensive aggregate under a cheap filter, which is the combination a
+    plan-grounded arm should be able to reason about: the prefix bounds how much
+    is read, and the distinct count bounds how much is held.
+
+- id: clickbench_nl_094
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits came from a refresh?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE IsRefresh <> 0
+  difficulty: easy
+  tags: [count, flag_semantics]
+  notes: >-
+    Every counter-62 task in the suite excludes refreshes; this counts them
+    directly. Included so an arm cannot score by learning that IsRefresh always
+    appears as a zero comparison.
+
+- id: clickbench_nl_095
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Which ten combinations of search engine and advertising engine occur most
+    often among hits that came through both?
+  gold_sql: |
+    SELECT SearchEngineID, AdvEngineID, COUNT(*) AS c
+    FROM hits
+    WHERE SearchEngineID <> 0 AND AdvEngineID <> 0
+    GROUP BY SearchEngineID, AdvEngineID
+    ORDER BY c DESC, SearchEngineID, AdvEngineID
+    LIMIT 10
+  difficulty: hard
+  tags: [group_by, top_n, sentinel, multi_column, tiebroken]
+  notes: >-
+    "Through both" is the conjunction of two sentinel tests, and it selects a
+    small population — the two channels rarely co-occur. A model that reads
+    "both" as a disjunction returns a far larger and entirely plausible set.
+
+- id: clickbench_nl_096
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "What are the earliest and latest event timestamps in the data?"
+  gold_sql: |
+    SELECT MIN(EventTime) AS earliest, MAX(EventTime) AS latest
+    FROM hits
+  difficulty: easy
+  tags: [min_max, full_scan, temporal_extent]
+  notes: >-
+    EventTime is a timestamp and EventDate is a separate date column; the two
+    have different extents and clickbench_nl_006 asks for the date version. A
+    model that answers with dates has answered the other task.
+
+- id: clickbench_nl_097
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Among hits with a search phrase, which ten regions produced the most distinct
+    search phrases?
+  gold_sql: |
+    SELECT RegionID, COUNT(DISTINCT SearchPhrase) AS phrases
+    FROM hits
+    WHERE SearchPhrase <> ''
+    GROUP BY RegionID
+    ORDER BY phrases DESC, RegionID
+    LIMIT 10
+  difficulty: hard
+  tags: [group_by, distinct, high_cardinality, empty_string_sentinel, tiebroken]
+  notes: >-
+    A distinct count of a wide string domain held per group, which is the
+    costliest aggregation shape in the suite — many groups, each carrying its own
+    large state. The filter reduces rows but not the number of groups.
+
+- id: clickbench_nl_098
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits had a window client width larger than their screen resolution width?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE WindowClientWidth > ResolutionWidth
+  difficulty: medium
+  tags: [count, column_comparison, unprunable]
+  notes: >-
+    A predicate between two columns of the same row, which no min/max statistic
+    can serve — skipping works on a column against a constant, not against
+    another column. The one shape in the suite that is unprunable by
+    construction rather than by choice of column.
+
+- id: clickbench_nl_099
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For counter 62 in July 2013, how many hits came from each traffic source?
+    Order by the source.
+  gold_sql: |
+    SELECT TraficSourceID, COUNT(*) AS c
+    FROM hits
+    WHERE CounterID = 62
+      AND EventDate >= '2013-07-01' AND EventDate <= '2013-07-31'
+    GROUP BY TraficSourceID
+    ORDER BY TraficSourceID
+  difficulty: medium
+  tags: [group_by, sort_key_prefix, date_range, low_cardinality]
+  notes: >-
+    The counter-62 report set's simplest member: a bounded prefix, a small
+    grouping domain, and no derived key. Its unbounded twin is
+    clickbench_nl_060, which asks the same thing of the whole table.
+
+- id: clickbench_nl_100
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Show every stored field of the ten most recent hits recorded for counter 62.
+  gold_sql: |
+    SELECT *
+    FROM hits
+    WHERE CounterID = 62
+    ORDER BY EventTime DESC, WatchID
+    LIMIT 10
+  difficulty: medium
+  tags: [wide_select, top_n, sort_key_prefix, tiebroken]
+  notes: >-
+    A wide read under a constrained sort-key prefix, against
+    clickbench_nl_052's wide read with no filter at all. Both return ten rows of
+    105 columns; only one of them has to look at the whole table to find them.
+
+- id: clickbench_nl_101
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many distinct client addresses appear in the data?"
+  gold_sql: |
+    SELECT COUNT(DISTINCT ClientIP)
+    FROM hits
+  difficulty: easy
+  tags: [distinct, high_cardinality, full_scan]
+  notes: >-
+    ClientIP is a signed 32-bit integer rather than a string, so this is a
+    distinct count over a numeric domain — cheaper per value than the URL and
+    SearchPhrase equivalents and useful as their calibration point.
+
+- id: clickbench_nl_102
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Which ten pages were most often the first thing a visitor saw from a search
+    engine? Give the URL and the count.
+  gold_sql: |
+    SELECT URL, COUNT(*) AS c
+    FROM hits
+    WHERE SearchEngineID <> 0 AND URL <> ''
+    GROUP BY URL
+    ORDER BY c DESC, URL
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, sentinel, empty_string_sentinel, high_cardinality, tiebroken]
+  notes: >-
+    Two sentinels and a high-cardinality grouping key. "The first thing a visitor
+    saw from a search engine" is landing-page phrasing for a search-engine
+    filter; the data has no session concept, so no ordering within a visit is
+    implied and none should be invented.
+
+- id: clickbench_nl_103
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits recorded a resolution width of zero?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE ResolutionWidth = 0
+  difficulty: easy
+  tags: [count, zero_is_a_value, sentinel]
+  notes: >-
+    Whether zero is a sentinel or a measurement is the question, and the task
+    takes no position: it asks for the count of zeros as such. Paired with
+    clickbench_nl_079, the other place a zero is asked about directly.
+
+- id: clickbench_nl_104
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    For each day from 14 to 16 July 2013, how many distinct visitors did counter
+    62 see? Order by date.
+  gold_sql: |
+    SELECT EventDate, COUNT(DISTINCT UserID) AS visitors
+    FROM hits
+    WHERE CounterID = 62
+      AND EventDate >= '2013-07-14' AND EventDate <= '2013-07-16'
+    GROUP BY EventDate
+    ORDER BY EventDate
+  difficulty: medium
+  tags: [group_by, distinct, sort_key_prefix, date_range, time_series, sparse_result]
+  notes: >-
+    A three-day question with a one-row answer. Measured: counter 62 records
+    hits on 2013-07-15 and on no other day, so two of the three days are simply
+    absent rather than zero. A model that pads the gaps to zero, or that reports
+    three rows because three days were asked for, is inventing data — and the
+    result shape gives it no warning, which is why the range is stated
+    inclusively and the gold left sparse.
+
+- id: clickbench_nl_105
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: >-
+    Across all hits, what are the total number of hits, the number of distinct
+    visitors, the number of distinct counters, and the average screen width?
+  gold_sql: |
+    SELECT COUNT(*) AS hits_count,
+           COUNT(DISTINCT UserID) AS visitors,
+           COUNT(DISTINCT CounterID) AS counters,
+           AVG(ResolutionWidth) AS mean_width
+    FROM hits
+  difficulty: medium
+  tags: [aggregate, distinct, full_scan, control]
+  notes: >-
+    Four aggregates of very different cost over one scan, and the suite's
+    summary row. Every arm should score it; an arm that does not has a problem
+    unrelated to grounding.

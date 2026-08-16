@@ -13,7 +13,7 @@
     ORDER BY COUNT(*) DESC, UserID
     LIMIT 10
   difficulty: medium
-  tags: [group_by, top_n, high_cardinality, sort_key_prefix, tiebroken]
+  tags: [group_by, top_n, high_cardinality, sort_key_prefix, tiebroken, clickbench_original]
   notes: >-
     UserID is the third column of the sort key, so grouping by it alone cannot
     use the primary index prefix - the layout arm should show up here.
@@ -30,7 +30,7 @@
     ORDER BY COUNT(*) DESC, UserID, SearchPhrase
     LIMIT 10
   difficulty: medium
-  tags: [group_by, top_n, high_cardinality, tiebroken]
+  tags: [group_by, top_n, high_cardinality, tiebroken, clickbench_original]
   notes: >-
     "Include hits with no search phrase" is stated because the ClickBench
     original has no filter and the neighbouring queries do. Without it the
@@ -49,7 +49,7 @@
     ORDER BY COUNT(*) DESC, UserID, m, SearchPhrase
     LIMIT 10
   difficulty: hard
-  tags: [group_by, top_n, high_cardinality, date_part, tiebroken]
+  tags: [group_by, top_n, high_cardinality, date_part, tiebroken, clickbench_original]
   notes: >-
     "Minute of the hour" is 0-59, not a truncation to the minute. EventTime is
     a DateTime; EventDate is a separate column and is the one in the sort key.

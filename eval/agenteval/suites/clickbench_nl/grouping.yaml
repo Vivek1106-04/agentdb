@@ -17,7 +17,7 @@
     GROUP BY AdvEngineID
     ORDER BY COUNT(*) DESC, AdvEngineID
   difficulty: medium
-  tags: [group_by, filter, order_by, tiebroken]
+  tags: [group_by, filter, order_by, tiebroken, clickbench_original]
 
 - id: clickbench_nl_008
   suite: clickbench_nl
@@ -29,7 +29,7 @@
     ORDER BY u DESC, RegionID
     LIMIT 10
   difficulty: medium
-  tags: [group_by, distinct, top_n, tiebroken]
+  tags: [group_by, distinct, top_n, tiebroken, clickbench_original]
 
 - id: clickbench_nl_009
   suite: clickbench_nl
@@ -46,7 +46,7 @@
     ORDER BY c DESC, RegionID
     LIMIT 10
   difficulty: medium
-  tags: [group_by, distinct, top_n, multi_column, tiebroken]
+  tags: [group_by, distinct, top_n, multi_column, tiebroken, clickbench_original]
 
 - id: clickbench_nl_010
   suite: clickbench_nl
@@ -61,7 +61,7 @@
     ORDER BY u DESC, MobilePhoneModel
     LIMIT 10
   difficulty: medium
-  tags: [group_by, distinct, top_n, empty_string_sentinel, tiebroken]
+  tags: [group_by, distinct, top_n, empty_string_sentinel, tiebroken, clickbench_original]
   notes: >-
     "Unknown" is the empty string, not NULL. A model that writes
     "MobilePhoneModel IS NOT NULL" gets every row back.
@@ -79,7 +79,7 @@
     ORDER BY u DESC, MobilePhone, MobilePhoneModel
     LIMIT 10
   difficulty: medium
-  tags: [group_by, distinct, top_n, empty_string_sentinel, tiebroken]
+  tags: [group_by, distinct, top_n, empty_string_sentinel, tiebroken, clickbench_original]
   notes: >-
     MobilePhone is a vendor code, not a boolean and not a number to compare
     against zero.
@@ -95,7 +95,7 @@
     ORDER BY c DESC, SearchPhrase
     LIMIT 10
   difficulty: medium
-  tags: [group_by, top_n, high_cardinality, empty_string_sentinel, tiebroken]
+  tags: [group_by, top_n, high_cardinality, empty_string_sentinel, tiebroken, clickbench_original]
 
 - id: clickbench_nl_013
   suite: clickbench_nl
@@ -110,7 +110,7 @@
     ORDER BY u DESC, SearchPhrase
     LIMIT 10
   difficulty: medium
-  tags: [group_by, distinct, top_n, high_cardinality, tiebroken]
+  tags: [group_by, distinct, top_n, high_cardinality, tiebroken, clickbench_original]
   notes: >-
     Differs from Q12 only in counting visitors instead of hits. The pair
     separates models that read the question from models that pattern-match the
@@ -129,4 +129,4 @@
     ORDER BY c DESC, SearchEngineID, SearchPhrase
     LIMIT 10
   difficulty: medium
-  tags: [group_by, top_n, high_cardinality, tiebroken]
+  tags: [group_by, top_n, high_cardinality, tiebroken, clickbench_original]

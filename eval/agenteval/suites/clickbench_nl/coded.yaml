@@ -1,0 +1,385 @@
+# Authored extensions: columns whose declared type is a lie about their contents.
+#
+# hits is a web-analytics table, and web analytics encodes everything. Age is a
+# SMALLINT that is not an age, Sex is a SMALLINT with three values, HitColor is a
+# CHAR that is not a colour, and zero means "unknown" in most of them. None of
+# that is in the DDL, all of it changes the answer, and a model that reasons from
+# column names alone gets a plausible number every time.
+#
+# This is the file where a column-profile arm should separate from a schema-only
+# one on accuracy rather than on bytes read.
+- id: clickbench_nl_063
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "What distinct values does the visitor age field take, and how many hits carry each? Order by the value."
+  gold_sql: |
+    SELECT Age, COUNT(*) AS c
+    FROM hits
+    GROUP BY Age
+    ORDER BY Age
+  difficulty: easy
+  tags: [group_by, value_distribution, coded_column]
+  notes: >-
+    Age takes six values and they are not ages: 0, 22, 28, 31, 50 and 55. It is a
+    bucket code, and 0 is the "unknown" bucket rather than a newborn. The
+    group-by form cannot get this wrong, which is why it is here — it establishes
+    the ground truth that clickbench_nl_064 then makes it possible to miss.
+
+- id: clickbench_nl_064
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "What is the average age of visitors whose age is known?"
+  gold_sql: |
+    SELECT AVG(Age)
+    FROM hits
+    WHERE Age <> 0
+  difficulty: hard
+  tags: [average, sentinel, coded_column, plausible_misreading]
+  notes: >-
+    Two traps in one question. Zero is the unknown bucket and must be excluded,
+    which the question states; and the remaining values are bucket codes, so
+    their mean is a number with no demographic meaning at all. Gold computes what
+    was asked. The task measures whether a system excludes the sentinel, not
+    whether it understands that the answer is nonsense.
+
+- id: clickbench_nl_065
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits came from visitors of a known sex, and how many from each value? Order by the value."
+  gold_sql: |
+    SELECT Sex, COUNT(*) AS c
+    FROM hits
+    WHERE Sex <> 0
+    GROUP BY Sex
+    ORDER BY Sex
+  difficulty: medium
+  tags: [group_by, sentinel, coded_column, value_distribution]
+  notes: >-
+    Sex holds three values, not two: 0, 1 and 2. A model that treats the column
+    as a boolean, or that assumes 0 and 1 are the two sexes, drops or mislabels
+    an entire population. Zero is unknown, as it is in Age and Income.
+
+- id: clickbench_nl_066
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "For each income bracket, how many distinct visitors are there? Order by the bracket."
+  gold_sql: |
+    SELECT Income, COUNT(DISTINCT UserID) AS visitors
+    FROM hits
+    GROUP BY Income
+    ORDER BY Income
+  difficulty: medium
+  tags: [group_by, distinct, coded_column, high_cardinality]
+  notes: >-
+    Income takes four values, 0 through 3, and is a bracket code rather than an
+    amount — summing or averaging it is meaningless, which is why the question
+    asks for a breakdown. The distinct visitor count per bracket is the expensive
+    part; the bracket itself has four values.
+
+- id: clickbench_nl_067
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which ten hit colour codes are most common? Give the code and the count."
+  gold_sql: |
+    SELECT HitColor, COUNT(*) AS c
+    FROM hits
+    GROUP BY HitColor
+    ORDER BY c DESC, HitColor
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, coded_column, tiebroken]
+  notes: >-
+    HitColor is a single character and holds values like '5' and 'g'. It is not a
+    colour name, not a hex code, and the digits in it are characters rather than
+    numbers — comparing it to an integer is a type error on ClickHouse rather
+    than a silent mismatch, which makes this the rare trap that fails loudly.
+
+- id: clickbench_nl_068
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits came from visitors whose age, sex and income are all unknown?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE Age = 0 AND Sex = 0 AND Income = 0
+  difficulty: hard
+  tags: [count, sentinel, coded_column, multi_column]
+  notes: >-
+    The same sentinel convention read three times in one predicate. A system that
+    has learned the convention from one column applies it to all three; one that
+    memorised a single column's quirk does not. Nothing here is prunable — none
+    of the three is in the sort key.
+
+- id: clickbench_nl_069
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "What distinct values does the HTTP error field take, and how many hits carry each?"
+  gold_sql: |
+    SELECT HTTPError, COUNT(*) AS c
+    FROM hits
+    GROUP BY HTTPError
+    ORDER BY HTTPError
+  difficulty: medium
+  tags: [group_by, constant_column, value_distribution]
+  notes: >-
+    Measured: HTTPError is 0 in all 99,997,497 rows. The column is constant, so
+    every filter on it is either the whole table or nothing, and the honest
+    answer to "how many hits recorded an error" is a question about the
+    column's domain rather than a count. Asked as a count it would have zero
+    gold, which scores every model that returns nothing — so it is asked as the
+    breakdown that reveals why.
+
+- id: clickbench_nl_070
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which ten browser languages appear most often, ignoring hits that recorded none?"
+  gold_sql: |
+    SELECT BrowserLanguage, COUNT(*) AS c
+    FROM hits
+    WHERE BrowserLanguage <> ''
+    GROUP BY BrowserLanguage
+    ORDER BY c DESC, BrowserLanguage
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, empty_string_sentinel, tiebroken]
+  notes: >-
+    BrowserLanguage is a short opaque code rather than a language name, and its
+    missing value is the empty string. Two conventions in one column: the
+    sentinel, and the fact that the value is not human-readable.
+
+- id: clickbench_nl_071
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which ten countries did visitors browse from most often, ignoring hits with no country recorded?"
+  gold_sql: |
+    SELECT BrowserCountry, COUNT(*) AS c
+    FROM hits
+    WHERE BrowserCountry <> ''
+    GROUP BY BrowserCountry
+    ORDER BY c DESC, BrowserCountry
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, empty_string_sentinel, tiebroken]
+  notes: >-
+    The country the *browser* reports, which is not RegionID — the two disagree
+    and answer different questions. A model that reaches for RegionID gets a
+    well-formed answer to a question nobody asked.
+
+- id: clickbench_nl_072
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which social networks sent hits, and how many did each send? Order by the network."
+  gold_sql: |
+    SELECT SocialSourceNetworkID, COUNT(*) AS c
+    FROM hits
+    WHERE SocialSourceNetworkID <> 0
+    GROUP BY SocialSourceNetworkID
+    ORDER BY SocialSourceNetworkID
+  difficulty: hard
+  tags: [group_by, sentinel, coded_column, empty_string_sentinel]
+  notes: >-
+    Measured: SocialNetwork, the human-readable column, is the empty string in
+    all 99,997,497 rows, while the coded SocialSourceNetworkID carries the
+    actual data. The obvious column for this question answers it with nothing,
+    and only the coded one answers it at all — which is the reverse of the usual
+    advice to prefer the named column over the id. A profile of the two columns
+    shows it immediately; a schema dump shows neither.
+
+- id: clickbench_nl_073
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits did not bounce?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE IsNotBounce <> 0
+  difficulty: medium
+  tags: [count, flag_semantics, negated_name]
+  notes: >-
+    The column is named for the negative, so "did not bounce" is the flag being
+    set rather than cleared. A model that reads past the name and writes
+    IsNotBounce = 0 answers the exact opposite question and returns a number of
+    the right magnitude.
+
+- id: clickbench_nl_074
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits were downloads?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE IsDownload <> 0
+  difficulty: easy
+  tags: [count, flag_semantics]
+  notes: >-
+    The positively-named counterpart to clickbench_nl_073, kept so the negated
+    name there is measured against a control rather than in isolation.
+
+- id: clickbench_nl_075
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits were flagged as artificial?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE IsArtifical <> 0
+  difficulty: medium
+  tags: [count, flag_semantics, misspelled_column]
+  notes: >-
+    The column is spelled IsArtifical, missing the second 'i'. A model that
+    corrects the spelling to IsArtificial gets an unknown-identifier error rather
+    than a wrong answer, which makes this a test of whether the schema was read
+    or recalled.
+
+- id: clickbench_nl_076
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "For each operating system code, how many distinct visitors were there? Give the ten with the most."
+  gold_sql: |
+    SELECT OS, COUNT(DISTINCT UserID) AS visitors
+    FROM hits
+    GROUP BY OS
+    ORDER BY visitors DESC, OS
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, distinct, coded_column, top_n, tiebroken]
+  notes: >-
+    OS is an integer code with no lookup table in this dataset, so the answer is
+    a list of numbers and cannot be anything else. The question says "code" to
+    stop a system inventing names for them.
+
+- id: clickbench_nl_077
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which ten user agent codes generated the most hits on mobile devices?"
+  gold_sql: |
+    SELECT UserAgent, COUNT(*) AS c
+    FROM hits
+    WHERE IsMobile <> 0
+    GROUP BY UserAgent
+    ORDER BY c DESC, UserAgent
+    LIMIT 10
+  difficulty: medium
+  tags: [group_by, top_n, coded_column, flag_semantics, tiebroken]
+  notes: >-
+    UserAgent is a small integer code, not the user-agent string — that is
+    UserAgentMinor and UserAgentMajor, which are separate columns holding
+    different things. Three plausible columns, one of which answers the question.
+
+- id: clickbench_nl_078
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits had JavaScript enabled but cookies disabled?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE JavascriptEnable <> 0 AND CookieEnable = 0
+  difficulty: medium
+  tags: [count, flag_semantics, multi_column, mixed_polarity]
+  notes: >-
+    Two flags read in opposite directions in one predicate, which is where flag
+    polarity actually goes wrong. Note the column is JavascriptEnable, not
+    JavaScriptEnabled — neither the capitalisation nor the tense is what a model
+    would guess.
+
+- id: clickbench_nl_079
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which five client time zone offsets are most common, and how many hits have each?"
+  gold_sql: |
+    SELECT ClientTimeZone, COUNT(*) AS c
+    FROM hits
+    GROUP BY ClientTimeZone
+    ORDER BY c DESC, ClientTimeZone
+    LIMIT 5
+  difficulty: medium
+  tags: [group_by, top_n, zero_is_a_value, coded_column, tiebroken]
+  notes: >-
+    The one column in this file where zero would be a real value rather than a
+    sentinel — an offset of zero is a time zone, not a missing one. Measured, it
+    never occurs at all: the offsets present are 135, 243, 433 and their
+    neighbours. So a system that reflexively filters out zeros loses nothing
+    here and still has the wrong model of the column, which is why the question
+    asks for the distribution rather than for a filtered count.
+
+- id: clickbench_nl_080
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which ten advertising engines delivered the most hits, ignoring hits that came through none?"
+  gold_sql: |
+    SELECT AdvEngineID, COUNT(*) AS c
+    FROM hits
+    WHERE AdvEngineID <> 0
+    GROUP BY AdvEngineID
+    ORDER BY c DESC, AdvEngineID
+    LIMIT 10
+  difficulty: easy
+  tags: [group_by, top_n, sentinel, tiebroken]
+  notes: >-
+    The grouped counterpart to clickbench_nl_001, which counts the same filtered
+    population without breaking it down. Zero is "no advertising engine" and
+    dominates the table, so omitting the filter buries every real value under one
+    group.
+
+- id: clickbench_nl_081
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits carried a URL parameter string?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE Params <> ''
+  difficulty: easy
+  tags: [count, empty_string_sentinel]
+  notes: >-
+    Params is free text and its absence is the empty string. IsParameter is a
+    separate flag column that means something else, and is the available wrong
+    answer for a question phrased around parameters.
+
+- id: clickbench_nl_082
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "What is the largest recorded page load response time, and the average across hits that recorded one?"
+  gold_sql: |
+    SELECT MAX(ResponseEndTiming) AS slowest, AVG(ResponseEndTiming) AS mean
+    FROM hits
+    WHERE ResponseEndTiming <> 0
+  difficulty: hard
+  tags: [aggregate, sentinel, timing_column]
+  notes: >-
+    The timing columns use zero for "not measured", so the average over all rows
+    is dragged toward zero by hits that never recorded a timing. The maximum is
+    unaffected by the sentinel and the mean is transformed by it, which is why
+    both are asked for in one question.
+
+- id: clickbench_nl_083
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "How many hits came through a traffic source that was not recorded as a search engine or an advertising engine?"
+  gold_sql: |
+    SELECT COUNT(*)
+    FROM hits
+    WHERE SearchEngineID = 0 AND AdvEngineID = 0
+  difficulty: medium
+  tags: [count, sentinel, multi_column]
+  notes: >-
+    The condition inside clickbench_nl_039's CASE expression, asked directly. The
+    pair exists so a system's handling of the sentinel can be measured
+    independently of its handling of a conditional grouping key.
+
+- id: clickbench_nl_084
+  suite: clickbench_nl
+  engine: [clickhouse]
+  question: "Which ten screen resolution depths are most common, and how many hits have each?"
+  gold_sql: |
+    SELECT ResolutionDepth, COUNT(*) AS c
+    FROM hits
+    GROUP BY ResolutionDepth
+    ORDER BY c DESC, ResolutionDepth
+    LIMIT 10
+  difficulty: easy
+  tags: [group_by, top_n, low_cardinality, tiebroken]
+  notes: >-
+    Colour depth in bits, a genuinely small numeric domain with no sentinel
+    convention. Included as the control for this file: if an arm separates here,
+    the separation is not about schema semantics.

@@ -15,20 +15,34 @@ data an engine benchmark uses.
 
 ## Status
 
-**57 of ~100 tasks. Gold is not yet frozen** — the hashes require the full
-100-part table, and `gold.lock.yaml` lands with it.
+**100 tasks.** 37 derived from ClickBench's own queries, 63 authored for this
+project.
 
 | file | ids | source |
 |---|---|---|
 | `aggregates.yaml`, `grouping.yaml`, `visitors.yaml` | 000–020 | ClickBench Q0–Q20 |
 | `text.yaml` | 021–028 | ClickBench Q21–Q28 |
 | `sessions.yaml` | 030–042 | ClickBench Q30–Q42 |
-| `layout.yaml` | 043–062 | authored for this project |
+| `layout.yaml` | 043–062 | authored — the sort key |
+| `coded.yaml` | 063–084 | authored — values the schema hides |
+| `analysis.yaml` | 085–105 | authored — text, time, and aggregation shape |
 
 ClickBench-derived translation is complete: every one of the 43 originals is
-either present or excluded for a stated reason (below). Ids at 043 and above are
-authored and carry no `clickbench_original` tag, which is what makes the
-contamination comparison in `docs/methodology.md` possible.
+either present or excluded for a stated reason (below). Only the derived tasks
+carry the `clickbench_original` tag, which is what makes the contamination
+comparison in `docs/methodology.md` possible — those queries are public and
+likely in training data, and the 63 authored ones are not.
+
+The authored files split by what they probe rather than by subject. `layout.yaml`
+is about the sort key `(CounterID, EventDate, UserID, EventTime, WatchID)`:
+filtering `EventDate` alone constrains no prefix, while adding `CounterID` turns
+the same shape into an index range, and tasks 043 and 044 are exactly that pair.
+`coded.yaml` is about columns whose declared type misdescribes their contents —
+`Age` takes six values and none of them is an age, `Sex` has three, `HitColor` is
+a `CHAR` holding codes like `5` and `g`, and zero means "unknown" in most of them
+but is a real value in `ClientTimeZone`. `analysis.yaml` is about the cost of the
+work itself: derived grouping keys, distinct counts over wide domains, and
+predicates comparing two columns of one row, which no statistic can serve.
 
 ### Originals deliberately excluded
 
