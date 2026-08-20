@@ -1,5 +1,10 @@
 """Talking to an MCP server over stdio, through the official SDK.
 
+Field names follow the ``mcp`` 2.x models (``input_schema``, ``is_error``). The
+1.x camelCase attributes are gone, and reading a missing ``isError`` with a
+default of ``False`` would have scored every failed tool call as a success —
+a benchmark reporting a number that is quietly too high.
+
 The SDK is reached by injected import, like every other vendor dependency here,
 so the harness imports and its tests run without it. Only a Family S run needs
 it installed.
@@ -42,7 +47,7 @@ class StdioSession:
             ToolSpec(
                 name=str(tool.name),
                 description=str(tool.description or ""),
-                input_schema=dict(tool.inputSchema or {}),
+                input_schema=dict(tool.input_schema or {}),
             )
             for tool in listing.tools
         )
@@ -60,7 +65,7 @@ class StdioSession:
 
         return ToolResult(
             content=_flatten(outcome.content),
-            is_error=bool(getattr(outcome, "isError", False)),
+            is_error=bool(getattr(outcome, "is_error", False)),
         )
 
     async def close(self) -> None:

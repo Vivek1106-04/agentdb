@@ -267,6 +267,7 @@ def test_server_configs_load_from_the_shipped_file() -> None:
 
     assert "S1_mcp_clickhouse" in servers
     assert servers["S1_mcp_clickhouse"].query_tools == ("run_select_query",)
+    assert servers["S2_mcp_agentdb"].query_tools == ("run_query",)
 
 
 def test_a_missing_server_file_simply_means_no_family_s(tmp_path: Path) -> None:

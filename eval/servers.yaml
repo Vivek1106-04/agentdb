@@ -1,4 +1,4 @@
-# Third-party MCP servers under test (SPEC §11.5, Family S).
+# MCP servers under test (SPEC §11.5, Family S).
 #
 # Versions are pinned and printed in the report: a benchmark of a moving beta
 # product is meaningless without saying exactly which build was measured.
@@ -24,3 +24,22 @@
   tools: []
   query_tools: ["run_select_query"]
   query_argument: query
+
+# agentdb's own server, launched exactly as a user would launch it. It is
+# configured here and scored by the same harness on the same tasks as every
+# other row — the harness imports nothing from agentdb, so this arm gets no
+# privileged path, and if it loses to the row above, that is the result.
+- name: S2_mcp_agentdb
+  version: "0.1.0"
+  command: uv
+  args: ["run", "agentdb", "--engine", "clickhouse"]
+  env:
+    AGENTDB_CLICKHOUSE_HOST: localhost
+    AGENTDB_CLICKHOUSE_PORT: "58123"
+    AGENTDB_CLICKHOUSE_USER: agentdb_ro
+    AGENTDB_CLICKHOUSE_DATABASE: agentdb
+  env_passthrough: ["AGENTDB_CLICKHOUSE_PASSWORD"]
+  # Default toolset, for the same reason as the row above.
+  tools: []
+  query_tools: ["run_query"]
+  query_argument: sql

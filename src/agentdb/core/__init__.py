@@ -15,6 +15,10 @@ from agentdb.core.context import (
 )
 from agentdb.core.context_builder import ContextBuilder
 from agentdb.core.explain import PlanExplainer
+from agentdb.core.plan_analyzer import PlanParseError
+from agentdb.core.plan_analyzer_databricks import (
+    PlanParseError as DatabricksPlanParseError,
+)
 from agentdb.core.plan_ir import (
     PlanNode,
     PlanOp,
@@ -28,11 +32,13 @@ from agentdb.core.query_shape import QueryShape
 
 __all__ = [
     "ContextBuilder",
+    "DatabricksPlanParseError",
     "GroundedContext",
     "GroundingLevel",
     "PlanExplainer",
     "PlanNode",
     "PlanOp",
+    "PlanParseError",
     "PlanSummary",
     "PlanWarning",
     "QueryShape",

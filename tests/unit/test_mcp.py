@@ -151,7 +151,7 @@ def test_two_servers_cannot_share_an_arm_name(tmp_path: Path) -> None:
 class FakeTool:
     name: str
     description: str | None = "does a thing"
-    inputSchema: dict[str, Any] | None = None  # noqa: N815 - mirrors the SDK field
+    input_schema: dict[str, Any] | None = None
 
 
 @dataclass
@@ -172,7 +172,7 @@ class FakeImageBlock:
 @dataclass
 class FakeOutcome:
     content: Any
-    isError: bool = False  # noqa: N815 - mirrors the SDK field
+    is_error: bool = False
 
 
 @dataclass
@@ -205,7 +205,7 @@ async def test_advertised_tools_are_reported_in_order() -> None:
     sdk = FakeSdkSession(
         listing=FakeListing(
             tools=[
-                FakeTool(name="run_select_query", inputSchema={"type": "object"}),
+                FakeTool(name="run_select_query", input_schema={"type": "object"}),
                 FakeTool(name="list_tables", description=None),
             ]
         )
@@ -238,7 +238,7 @@ async def test_a_tool_result_flattens_its_text_blocks() -> None:
 
 async def test_a_tool_that_reports_failure_is_data_not_an_exception() -> None:
     # The system under test refusing a call is a measurement of that system
-    sdk = FakeSdkSession(outcome=FakeOutcome(content=[FakeTextBlock("bad column")], isError=True))
+    sdk = FakeSdkSession(outcome=FakeOutcome(content=[FakeTextBlock("bad column")], is_error=True))
 
     result = await _session(sdk).call_tool("run_select_query", {})
 
