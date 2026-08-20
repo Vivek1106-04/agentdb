@@ -10,6 +10,16 @@ CREATE DATABASE IF NOT EXISTS agentdb;
 -- and lower its own ceilings. CHANGEABLE_IN_READONLY opens exactly those, and
 -- the MAX constraints keep them ceilings rather than suggestions.
 --
+-- Every per-query limit of SPEC §13.3 needs that treatment, not just the two
+-- obvious ones. A ceiling the caller cannot set is not a ceiling the caller can
+-- lower.
+--
+-- The two use_* settings are not limits at all: EXPLAIN must switch both off to
+-- report honest index evidence on 25.9 (see EXPLAIN_SETTINGS in
+-- clickhouse_sql.py), and with them locked the plan tools cannot run as this
+-- user at all. Opening them grants nothing — both only make the server do less
+-- work-avoidance, never more.
+--
 -- no_password is deliberate and local-only: this compose file binds to
 -- 127.0.0.1 and holds public benchmark data. Any deployment beyond a laptop
 -- must give this account a password from the environment.
@@ -32,9 +42,13 @@ ALTER USER agentdb_ro
     SETTINGS readonly = 1,
              max_execution_time = 30 MAX 30 CHANGEABLE_IN_READONLY,
              max_result_rows = 10000 MAX 10000 CHANGEABLE_IN_READONLY,
-             max_rows_to_read = 500000000,
+             result_overflow_mode = 'break' CHANGEABLE_IN_READONLY,
+             max_rows_to_read = 500000000 MAX 500000000 CHANGEABLE_IN_READONLY,
+             max_bytes_to_read = 100000000000 MAX 100000000000 CHANGEABLE_IN_READONLY,
              max_bytes_before_external_group_by = 2000000000,
              max_bytes_before_external_sort = 2000000000,
+             use_query_condition_cache = 1 CHANGEABLE_IN_READONLY,
+             use_skip_indexes_on_data_read = 1 CHANGEABLE_IN_READONLY,
              log_comment = '' CHANGEABLE_IN_READONLY;
 
 GRANT SELECT ON agentdb.* TO agentdb_ro;

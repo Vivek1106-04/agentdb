@@ -136,9 +136,14 @@ def explain_statement(sql: str, mode: ExplainMode) -> str:
     ClickHouse reports no cost annotations, and the adapter refuses the call
     rather than returning estimates dressed up as measurements. The caller checks
     :attr:`~agentdb.adapters.base.Capability.COST_ANNOTATED_PLAN` first.
+
+    The ``SETTINGS`` clause **trails** the explained query. ClickHouse parses
+    ``EXPLAIN <options> <query> SETTINGS <query settings>``; a ``SETTINGS`` block
+    between the options and the query is a syntax error, and the two are easy to
+    confuse because ``EXPLAIN``'s own options are written without the keyword.
     """
     if mode is ExplainMode.ESTIMATE:
-        return f"EXPLAIN indexes = 1, projections = 1, json = 1\nSETTINGS {EXPLAIN_SETTINGS}\n{sql}"
+        return f"EXPLAIN indexes = 1, projections = 1, json = 1\n{sql}\nSETTINGS {EXPLAIN_SETTINGS}"
     if mode is ExplainMode.PIPELINE:
         return f"EXPLAIN PIPELINE {sql}"
     return f"EXPLAIN SYNTAX {sql}"
@@ -155,6 +160,12 @@ def profile_statement(
 
     ``approx_top_k`` is used rather than the spec sketch's ``topK``: the profile
     carries a count per value, and ``topK`` returns values alone.
+
+    Its result is ``Array(Tuple(item, count, error))`` — a *named* tuple, which
+    ``clickhouse-connect`` hands back as a dict rather than a tuple. The
+    ``arrayMap`` drops the names and the third field, so the driver returns the
+    ``(value, count)`` pairs the profile actually stores instead of a shape that
+    happens to depend on which driver is installed.
     """
     quoted = quote_identifier(column)
     if sample_fraction is not None:
@@ -166,7 +177,8 @@ def profile_statement(
         f"       countIf({quoted} IS NULL) / greatest(count(), 1) AS null_ratio,\n"
         f"       toString(min({quoted})) AS min_value,\n"
         f"       toString(max({quoted})) AS max_value,\n"
-        f"       approx_top_k({top_k})({quoted}) AS top_values,\n"
+        f"       arrayMap(entry -> (entry.1, entry.2),"
+        f" approx_top_k({top_k})({quoted})) AS top_values,\n"
         f"       count() AS sampled_rows\n"
         f"FROM {scan}"
     )

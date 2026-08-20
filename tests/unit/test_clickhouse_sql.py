@@ -55,7 +55,19 @@ def test_estimate_plan_disables_the_two_settings_that_hide_index_evidence() -> N
     assert EXPLAIN_SETTINGS in statement
     assert "use_query_condition_cache = 0" in EXPLAIN_SETTINGS
     assert "use_skip_indexes_on_data_read = 0" in EXPLAIN_SETTINGS
-    assert statement.endswith("SELECT 1")
+
+
+def test_the_settings_clause_trails_the_explained_query() -> None:
+    """ClickHouse parses EXPLAIN <options> <query> SETTINGS <settings>.
+
+    Putting the SETTINGS block between the options and the query is a syntax
+    error, not a style choice — and an easy one to make, since EXPLAIN's own
+    options are written in the same place without the keyword.
+    """
+    statement = explain_statement("SELECT 1", ExplainMode.ESTIMATE)
+
+    assert statement.index("SELECT 1") < statement.index("SETTINGS")
+    assert statement.endswith(EXPLAIN_SETTINGS)
 
 
 def test_pipeline_and_syntax_modes_use_their_own_statements() -> None:
@@ -80,6 +92,24 @@ def test_profile_statement_samples_when_the_table_has_a_sampling_key() -> None:
     assert "FROM `agentdb`.`hits` SAMPLE 0.01" in statement
     assert "uniqCombined64(`UserID`)" in statement
     assert "approx_top_k(10)(`UserID`)" in statement
+
+
+def test_the_top_k_result_is_stripped_of_its_field_names() -> None:
+    """``approx_top_k`` returns a named tuple, which the driver hands back as a dict.
+
+    The parser stores ``(value, count)`` pairs, so the statement projects the
+    names away rather than leaving the returned shape to depend on which
+    ClickHouse driver happens to be installed.
+    """
+    statement = profile_statement(
+        source="`agentdb`.`hits`",
+        column="UserID",
+        top_k=10,
+        sample_fraction=0.01,
+        max_rows=100_000,
+    )
+
+    assert "arrayMap(entry -> (entry.1, entry.2), approx_top_k(10)(`UserID`))" in statement
 
 
 def test_profile_statement_reads_a_bounded_prefix_without_a_sampling_key() -> None:

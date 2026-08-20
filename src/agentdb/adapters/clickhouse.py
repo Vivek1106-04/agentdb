@@ -250,14 +250,17 @@ class ClickHouseAdapter(BaseAdapter):
                 sample_fraction=fraction,
                 max_rows=sample.max_rows,
             )
+            # The statement bounds its own read — SAMPLE where there is a
+            # sampling key, LIMIT where there is not — and that is the only
+            # bound the probe can use. `max_rows_to_read` does not truncate on
+            # ClickHouse, it *throws* TOO_MANY_ROWS on the row that crosses it,
+            # so setting it to the same figure the LIMIT already enforces turned
+            # every profile of a table larger than the ceiling into an error.
             row = (
                 await self._query(
                     statement,
                     {},
-                    settings={
-                        "max_execution_time": sample.timeout_s,
-                        "max_rows_to_read": sample.max_rows,
-                    },
+                    settings={"max_execution_time": sample.timeout_s},
                 )
             ).result_rows[0]
             profiles.append(
@@ -299,9 +302,17 @@ class ClickHouseAdapter(BaseAdapter):
 
     async def execute(self, sql: str, limits: Limits) -> ResultSet:
         """Run ``sql`` under ``limits``, truncating rather than streaming forever."""
+        # `result_overflow_mode = 'break'` is what makes `max_result_rows` a
+        # ceiling instead of an error: without it ClickHouse raises
+        # TOO_MANY_ROWS_OR_BYTES the moment a result crosses the limit, so
+        # asking for the first 3 rows of a 6,000-row aggregate fails rather than
+        # returning 3 rows. With it the server stops producing rows at the next
+        # block boundary — which can overshoot slightly, so the truncation below
+        # still trims to the exact figure and reports `truncated`.
         settings: dict[str, Any] = {
             "max_execution_time": limits.timeout_s,
             "max_result_rows": limits.max_result_rows,
+            "result_overflow_mode": "break",
         }
         if limits.max_rows_to_read is not None:
             settings["max_rows_to_read"] = limits.max_rows_to_read

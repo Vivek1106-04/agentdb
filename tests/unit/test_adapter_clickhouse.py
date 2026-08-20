@@ -296,7 +296,26 @@ async def test_a_sampled_profile_says_it_was_sampled_and_how_many_rows_it_read()
     probe = client.queries[-1]
     assert "SAMPLE 0.01" in probe
     assert client.settings[-1]["max_execution_time"] == 10
-    assert client.settings[-1]["max_rows_to_read"] == 100_000
+
+
+async def test_the_probe_does_not_set_a_row_ceiling_that_would_throw() -> None:
+    """``max_rows_to_read`` throws on ClickHouse; it does not truncate.
+
+    Setting it to the same figure the probe's own SAMPLE or LIMIT already
+    enforces turned every profile of a table bigger than that figure into a
+    TOO_MANY_ROWS error — which is every table worth profiling.
+    """
+    adapter, client = _adapter(
+        columns=_COLUMNS,
+        skip_indexes=FakeResult(result_rows=[]),
+        projections=FakeResult(result_rows=[]),
+        footprint=FakeResult(result_rows=[[1, 2]]),
+        profile=_PROFILE_ROW,
+    )
+
+    await adapter.column_profile(REF, ["CounterID"], SAMPLE)
+
+    assert "max_rows_to_read" not in client.settings[-1]
 
 
 async def test_a_table_without_a_sampling_key_is_profiled_from_a_bounded_prefix() -> None:
@@ -413,9 +432,23 @@ async def test_execute_passes_every_ceiling_and_attributes_the_query() -> None:
         "log_comment": f"{LOG_COMMENT_PREFIX}:agentdb:turn0001",
         "max_execution_time": 30,
         "max_result_rows": 2,
+        "result_overflow_mode": "break",
         "max_rows_to_read": 500,
         "max_bytes_to_read": 1_000,
     }
+
+
+async def test_the_row_ceiling_stops_the_result_rather_than_failing_the_query() -> None:
+    """Without ``result_overflow_mode`` ClickHouse raises on the row that crosses it.
+
+    Asking for the first three rows of a six-thousand-row aggregate would then
+    be an error instead of three rows, which is not what a ceiling means.
+    """
+    adapter, client = _adapter(query=FakeResult(column_names=["n"], result_rows=[]))
+
+    await adapter.execute("SELECT n", LIMITS)
+
+    assert client.settings[-1]["result_overflow_mode"] == "break"
 
 
 async def test_a_result_past_the_row_ceiling_is_cut_and_says_it_was_cut() -> None:
