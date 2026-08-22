@@ -24,7 +24,7 @@ from agentdb.adapters.base import Adapter
 from agentdb.adapters.clickhouse import ClickHouseAdapter
 from agentdb.adapters.clickhouse_client import ClickHouseTarget, Importer, build_client
 from agentdb.config import Config
-from agentdb.core import ContextBuilder, GroundingLevel, PlanExplainer
+from agentdb.core import ContextBuilder, GroundedContext, GroundingLevel, PlanExplainer
 
 VERSION = "1.0"
 """Bumped whenever the assembled payload changes shape, because that changes the number."""
@@ -47,13 +47,13 @@ class GroundedContextProvider:
     explainer: PlanExplainer | None = None
     """Present when the arm may show the model its plan (``A3`` and above)."""
 
-    _cache: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
+    _cache: dict[str, GroundedContext] = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def fingerprint(self) -> str:
         """Hash of everything that decides what this provider returns."""
         config = self.builder.config
-        return _fingerprint(
+        return fingerprint_config(
             {
                 "provider": self.name,
                 "version": self.version,
@@ -67,17 +67,24 @@ class GroundedContextProvider:
         )
 
     async def context(self, *, namespace: str, question: str) -> str:  # noqa: ARG002
-        """The rendered payload for ``namespace``, built once per namespace per run.
+        """The rendered payload for ``namespace``, built once per namespace per run."""
+        return (await self.build(namespace)).render()
+
+    async def build(self, namespace: str) -> GroundedContext:
+        """The assembled context object, built once per namespace per run.
 
         Caching is not an optimization here so much as a fairness property: every
         task in a suite must see byte-identical grounding, and rebuilding from a
         live server per task would let a merge or a background insert change the
         payload halfway through an arm.
+
+        The object rather than its rendering, because the arms above this one
+        need the facts as well as the text — the memory arm fingerprints the
+        schema it was built against (SPEC §10.3).
         """
         cached = self._cache.get(namespace)
         if cached is None:
-            context = await self.builder.build(namespace, self.level)
-            cached = context.render()
+            cached = await self.builder.build(namespace, self.level)
             self._cache[namespace] = cached
         return cached
 
@@ -147,7 +154,7 @@ def build_provider(
     )
 
 
-def _fingerprint(config: dict[str, object]) -> str:
+def fingerprint_config(config: dict[str, object]) -> str:
     """SHA-256 over the canonical JSON form, so the hash is stable across runs."""
     payload = json.dumps(config, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

@@ -209,7 +209,13 @@ def test_a_missing_provider_catalogue_simply_means_no_family_a_arms(tmp_path: Pa
 def test_the_shipped_provider_catalogue_is_keyed_by_arm() -> None:
     configs = load_grounded_configs(Path("eval/providers.yaml"))
 
-    assert sorted(configs) == ["A1_stats", "A2_layout", "A3_plan"]
+    assert sorted(configs) == [
+        "A1_stats",
+        "A2_layout",
+        "A3_plan",
+        "A4_memory",
+        "A5_negmemory",
+    ]
 
 
 async def test_an_arm_that_does_not_exist_yet_is_named() -> None:

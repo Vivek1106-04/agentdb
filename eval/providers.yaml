@@ -26,3 +26,26 @@
     level: layout
     name: agentdb/A3_plan
     plan_review: true
+
+# A4 and A5 are A3 plus the bi-temporal exemplar store (SPEC §10, §11.3). They
+# differ by one flag: A5 additionally serves the queries that failed here, with
+# their error class, as explicit "do not do this" context. Nobody else ships
+# that block, which is exactly why it gets its own arm rather than being folded
+# into A4 and reported as one number.
+#
+# Both need AGENTDB_MEMORY_DSN reachable (make up). The store is agentdb's
+# private state — the harness resolves a factory by name and never learns a
+# Postgres exists.
+
+- arm: A4_memory
+  provider: agentdb.bench.memory_provider:clickhouse_memory_provider
+  plan_review: true
+  options:
+    name: agentdb/A4_memory
+
+- arm: A5_negmemory
+  provider: agentdb.bench.memory_provider:clickhouse_memory_provider
+  plan_review: true
+  options:
+    name: agentdb/A5_negmemory
+    include_failures: true
