@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from agentdb.adapters import Adapter, AdapterError
 from agentdb.config import Config
+from agentdb.core.memory.store import ExemplarStore
 from agentdb.server.base import ServerContext, ToolDef, ToolError
 from agentdb.server.schemas import JsonValue
 from agentdb.server.tools import all_tools
@@ -80,7 +81,11 @@ class ToolCatalog:
             return ToolResponse(structured=structured, is_error=True)
 
 
-def build_catalog(adapter: Adapter, config: Config | None = None) -> ToolCatalog:
-    """The catalog for one engine connection."""
-    context = ServerContext(adapter=adapter, config=config or Config())
+def build_catalog(
+    adapter: Adapter,
+    config: Config | None = None,
+    store: ExemplarStore | None = None,
+) -> ToolCatalog:
+    """The catalog for one engine connection, plus the memory it has, if any."""
+    context = ServerContext(adapter=adapter, config=config or Config(), store=store)
     return ToolCatalog(tools=all_tools(context))

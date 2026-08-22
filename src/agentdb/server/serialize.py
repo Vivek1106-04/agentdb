@@ -30,6 +30,9 @@ from agentdb.adapters.models import (
     WorkloadEntry,
 )
 from agentdb.core.context import GroundedContext, RelationContext
+from agentdb.core.memory.models import Exemplar, ScoredExemplar
+from agentdb.core.memory.ranking import TERMS
+from agentdb.core.memory.store import Revision
 from agentdb.core.plan_ir import PlanNode, PlanSummary, PlanWarning
 from agentdb.server.schemas import JsonValue
 
@@ -268,6 +271,55 @@ def grounded_context(value: GroundedContext) -> dict[str, JsonValue]:
         "relations": [relation_context(item) for item in value.relations],
         "rendered": value.render(),
         "size_bytes": value.size_bytes,
+    }
+
+
+def exemplar(value: Exemplar) -> dict[str, JsonValue]:
+    """A remembered triple, with both time axes intact (SPEC §10.2).
+
+    ``valid_to`` and ``tx_to`` are rendered separately rather than collapsed into
+    a single "active" flag: they answer different questions — whether the schema
+    still supports the query, and whether agentdb has since corrected it — and an
+    agent that could not tell them apart would treat a corrected query as a
+    broken one.
+    """
+    return {
+        "id": value.id,
+        "engine": value.engine,
+        "namespace": value.namespace,
+        "question": value.question,
+        "sql": value.sql,
+        "normalized_sql": value.normalized_sql,
+        "relations": list(value.relations),
+        "columns": list(value.columns),
+        "schema_version_id": value.schema_version_id,
+        "outcome": value.outcome.value,
+        "provenance": value.provenance.value,
+        "valid_from": value.valid_from.isoformat(),
+        "valid_to": None if value.valid_to is None else value.valid_to.isoformat(),
+        "tx_from": value.tx_from.isoformat(),
+        "tx_to": None if value.tx_to is None else value.tx_to.isoformat(),
+        "rows_returned": value.rows_returned,
+        "bytes_read": value.bytes_read,
+        "duration_ms": value.duration_ms,
+        "error_class": value.error_class,
+        "error_text": value.error_text,
+    }
+
+
+def scored_exemplar(value: ScoredExemplar) -> dict[str, JsonValue]:
+    return {
+        "exemplar": exemplar(value.exemplar),
+        "score": value.score,
+        "components": {term: value.components[term] for term in TERMS},
+    }
+
+
+def exemplar_revision(value: Revision) -> dict[str, JsonValue]:
+    return {
+        "exemplar": exemplar(value.exemplar),
+        "fingerprint": value.fingerprint,
+        "reason": value.reason,
     }
 
 

@@ -23,6 +23,8 @@ from agentdb.adapters.databricks import DatabricksAdapter
 from agentdb.adapters.databricks_client import DatabricksTarget
 from agentdb.adapters.databricks_client import build_client as build_databricks_client
 from agentdb.config import Config
+from agentdb.core.memory.postgres import connect
+from agentdb.core.memory.store import ExemplarStore
 from agentdb.server import build_catalog
 from agentdb.server.transports import serve_stdio
 
@@ -41,6 +43,15 @@ def parser() -> argparse.ArgumentParser:
         default="clickhouse",
         help="which engine to connect to; credentials come from the environment",
     )
+    parsed.add_argument(
+        "--memory",
+        action="store_true",
+        help=(
+            "serve the exemplar memory tools, connecting to AGENTDB_MEMORY_DSN. "
+            "Off by default: the tools are absent rather than advertised and broken "
+            "when there is no store behind them"
+        ),
+    )
     return parsed
 
 
@@ -56,14 +67,29 @@ async def build_adapter(engine: str) -> Adapter:
     )
 
 
-async def serve(engine: str, config: Config | None = None) -> None:
+def build_store(config: Config) -> ExemplarStore:
+    """Open the exemplar store and make sure its schema is there (SPEC §10.2).
+
+    Applying the DDL on startup rather than in a migration step is deliberate:
+    the store is agentdb's own state, it is created idempotently, and a reader
+    following the README should not have to run anything between
+    ``docker compose up`` and a working server.
+    """
+    store = ExemplarStore(connect(config.memory_dsn), config=config)
+    store.ensure_schema()
+    return store
+
+
+async def serve(engine: str, config: Config | None = None, *, memory: bool = False) -> None:
     """Connect, build the catalog, and serve until the client disconnects."""
+    effective = config or Config()
     adapter = await build_adapter(engine)
-    await serve_stdio(build_catalog(adapter, config))
+    store = build_store(effective) if memory else None
+    await serve_stdio(build_catalog(adapter, effective, store=store))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the ``agentdb`` console script."""
     arguments = parser().parse_args(argv)
-    asyncio.run(serve(arguments.engine))
+    asyncio.run(serve(arguments.engine, memory=arguments.memory))
     return 0

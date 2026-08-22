@@ -10,12 +10,24 @@ prove the schema matched the test rather than the server.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
-from agentdb.adapters import ExplainMode, RawPlan, ResultSet, WorkloadEntry
+from agentdb.adapters import (
+    ColumnDef,
+    ExplainMode,
+    RawPlan,
+    RelationDetail,
+    RelationRef,
+    ResultSet,
+    WorkloadEntry,
+)
 from agentdb.config import Config
+from agentdb.core.memory import snapshot, snapshot_to_json
+from agentdb.core.memory.store import ExemplarStore
 from agentdb.server import ToolCatalog, build_catalog
 from tests.fakes import FakeAdapter, clickhouse_hits_fixture, databricks_tpch_fixture
+from tests.memory_fakes import FakeConnection, exemplar_row, version_row
 
 CLICKHOUSE_PLAN: dict[str, Any] = {
     "Plan": {
@@ -80,13 +92,70 @@ WORKLOAD = (
 )
 
 
+MEMORY_NOW = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
+MEMORY_EARLIER = datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+
+
+def memory_connection(engine: str = "clickhouse", namespace: str = "agentdb") -> FakeConnection:
+    """The scripted Postgres behind :func:`memory_store`.
+
+    Exposed separately from the store so a test can assert what was written —
+    which relations and columns a recorded exemplar carries is the whole basis
+    of re-validation, and it is derived rather than supplied.
+    """
+    state = snapshot(
+        engine,  # type: ignore[arg-type]  # Literal, from the caller
+        namespace,
+        [
+            RelationDetail(
+                ref=RelationRef(namespace=namespace, name="hits"),
+                columns=(ColumnDef(name="CounterID", data_type="UInt32", is_nullable=False),),
+                create_statement=f"CREATE TABLE {namespace}.hits (...)",
+            )
+        ],
+    )
+    layout = json.dumps(snapshot_to_json(state))
+    version = version_row(
+        id=1, engine=engine, namespace=namespace, layout_json=layout, observed_at=MEMORY_EARLIER
+    )
+    remembered = exemplar_row(
+        id=7,
+        engine=engine,
+        namespace=namespace,
+        embedding="[]",
+        bytes_read=4_096,
+        valid_from=MEMORY_EARLIER,
+        tx_from=MEMORY_EARLIER,
+    )
+    return FakeConnection(
+        {
+            "ORDER BY observed_at DESC LIMIT 1": [[version]],
+            "ORDER BY observed_at, id": [[version]],
+            "ORDER BY (relations &&": [[remembered]],
+            "INSERT INTO agentdb_exemplar": [[remembered]],
+            "ORDER BY tx_from, id": [[remembered]],
+        }
+    )
+
+
+def memory_store(connection: FakeConnection | None = None) -> ExemplarStore:
+    """An exemplar store whose Postgres is scripted rather than running.
+
+    The memory tools are contract-tested like every other tool, so the catalog
+    the tests build has to have a store behind it. What it does not have to have
+    is a database: the store speaks a structural connection protocol precisely so
+    this is possible (SPEC §10.2).
+    """
+    return ExemplarStore(connection or memory_connection(), clock=lambda: MEMORY_NOW)
+
+
 def clickhouse_catalog(
     plan: dict[str, Any] | None = None, config: Config | None = None
 ) -> tuple[ToolCatalog, FakeAdapter]:
     """A catalog over the ClickBench-shaped fake, with everything scripted."""
     adapter = clickhouse_hits_fixture()
     _script(adapter, plan or CLICKHOUSE_PLAN)
-    return build_catalog(adapter, config), adapter
+    return build_catalog(adapter, config, store=memory_store()), adapter
 
 
 def databricks_catalog() -> tuple[ToolCatalog, FakeAdapter]:
@@ -100,7 +169,8 @@ def databricks_catalog() -> tuple[ToolCatalog, FakeAdapter]:
         sql="",
         payload=DATABRICKS_PLAN,
     )
-    return build_catalog(adapter), adapter
+    store = memory_store(memory_connection("databricks", "samples.tpch"))
+    return build_catalog(adapter, store=store), adapter
 
 
 def _script(adapter: FakeAdapter, plan: dict[str, Any]) -> None:

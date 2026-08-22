@@ -17,6 +17,7 @@ from agentdb.adapters import EngineConnectionError
 from agentdb.adapters.clickhouse_client import ClickHouseTarget
 from agentdb.adapters.databricks import DatabricksAdapter
 from tests.fakes import clickhouse_hits_fixture
+from tests.memory_fakes import FakeConnection
 
 
 async def test_the_default_engine_is_the_one_that_runs_locally() -> None:
@@ -77,15 +78,50 @@ async def test_a_connection_failure_surfaces_rather_than_starting_a_useless_serv
 
 
 def test_main_serves_the_engine_it_was_asked_for(monkeypatch: pytest.MonkeyPatch) -> None:
-    served: list[str] = []
+    served: list[tuple[str, bool]] = []
 
-    async def serve(engine: str, config: object = None) -> None:
-        served.append(engine)
+    async def serve(engine: str, config: object = None, *, memory: bool = False) -> None:
+        served.append((engine, memory))
 
     monkeypatch.setattr(cli, "serve", serve)
 
     assert cli.main(["--engine", "databricks"]) == 0
-    assert served == ["databricks"]
+    assert served == [("databricks", False)]
+
+
+def test_the_memory_tools_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Absent by default: a build with no Postgres serves the rest of the catalog."""
+    served: list[tuple[str, bool]] = []
+
+    async def serve(engine: str, config: object = None, *, memory: bool = False) -> None:
+        served.append((engine, memory))
+
+    monkeypatch.setattr(cli, "serve", serve)
+
+    assert cli.main(["--memory"]) == 0
+    assert served == [("clickhouse", True)]
+
+
+async def test_serving_with_memory_opens_the_store_and_applies_its_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalogs: list[Any] = []
+    connection = FakeConnection()
+
+    async def build_adapter(engine: str) -> Any:
+        return clickhouse_hits_fixture()
+
+    async def serve_stdio(catalog: Any, **_: Any) -> None:
+        catalogs.append(catalog)
+
+    monkeypatch.setattr(cli, "build_adapter", build_adapter)
+    monkeypatch.setattr(cli, "serve_stdio", serve_stdio)
+    monkeypatch.setattr(cli, "connect", lambda _dsn: connection)
+
+    await cli.serve("clickhouse", memory=True)
+
+    assert "retrieve_exemplars" in catalogs[0].names
+    assert "CREATE TABLE IF NOT EXISTS agentdb_exemplar" in connection.statements[0][0]
 
 
 async def test_serving_hands_the_catalog_for_that_adapter_to_the_transport(

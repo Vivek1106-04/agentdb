@@ -398,6 +398,119 @@ DEFS: Final[dict[str, dict[str, JsonValue]]] = {
         "required": ["detail", "layout", "profiles", "profiled_columns_available"],
         "additionalProperties": False,
     },
+    "exemplar": {
+        "type": "object",
+        "description": (
+            "A remembered question/SQL/outcome triple, bound to a schema version "
+            "and carried on two time axes (SPEC §10). Valid time says when it was "
+            "true of the schema; transaction time says when agentdb learned it."
+        ),
+        "properties": {
+            "id": {"type": "integer"},
+            "engine": {"enum": ["clickhouse", "databricks"]},
+            "namespace": {"type": "string"},
+            "question": {"type": "string"},
+            "sql": {"type": "string"},
+            "normalized_sql": {
+                "type": "string",
+                "description": "Literals parameterized. Two queries differing only in "
+                "their constants share this key.",
+            },
+            "relations": _array({"type": "string"}, "Relations the query names."),
+            "columns": _array({"type": "string"}, "Columns re-validated on a schema change."),
+            "schema_version_id": {
+                "type": "integer",
+                "description": "The schema version this was written against.",
+            },
+            "outcome": {"enum": ["success", "error", "rejected"]},
+            "provenance": {"enum": ["agent", "workload_mined", "curated"]},
+            "valid_from": {"type": "string", "format": "date-time"},
+            "valid_to": _nullable(
+                "string",
+                "When the schema stopped supporting it; null while it still holds.",
+            ),
+            "tx_from": {"type": "string", "format": "date-time"},
+            "tx_to": _nullable(
+                "string", "When a correction superseded this record; null while current."
+            ),
+            "rows_returned": _nullable("integer", ""),
+            "bytes_read": _nullable("integer", ""),
+            "duration_ms": _nullable("integer", ""),
+            "error_class": _nullable(
+                "string", "syntax | semantic | plan_rejection | timeout | permission."
+            ),
+            "error_text": _nullable("string", ""),
+        },
+        "required": [
+            "id",
+            "engine",
+            "namespace",
+            "question",
+            "sql",
+            "normalized_sql",
+            "relations",
+            "columns",
+            "schema_version_id",
+            "outcome",
+            "provenance",
+            "valid_from",
+            "valid_to",
+            "tx_from",
+            "tx_to",
+            "rows_returned",
+            "bytes_read",
+            "duration_ms",
+            "error_class",
+            "error_text",
+        ],
+        "additionalProperties": False,
+    },
+    "scored_exemplar": {
+        "type": "object",
+        "description": "One retrieved exemplar with the ranking that selected it.",
+        "properties": {
+            "exemplar": _ref("exemplar"),
+            "score": {"type": "number", "description": "The weighted total."},
+            "components": {
+                "type": "object",
+                "description": (
+                    "Each term before weighting. Reported because every weight in "
+                    "the ranking is an ablation arm (SPEC §10.4)."
+                ),
+                "properties": {
+                    "sem": {"type": "number", "description": "Cosine against the question."},
+                    "rel": {"type": "number", "description": "Relation-set overlap."},
+                    "success": {"type": "number", "description": "1 when the query worked."},
+                    "recency": {"type": "number", "description": "Decay on when it was learned."},
+                    "cost": {"type": "number", "description": "Bytes read, relative to the pool."},
+                },
+                "required": ["sem", "rel", "success", "recency", "cost"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["exemplar", "score", "components"],
+        "additionalProperties": False,
+    },
+    "exemplar_revision": {
+        "type": "object",
+        "description": "One revision of a remembered query, for the bi-temporal history.",
+        "properties": {
+            "exemplar": _ref("exemplar"),
+            "fingerprint": {
+                "type": "string",
+                "description": "Schema fingerprint this revision was written against; "
+                "empty when that version is no longer on record.",
+            },
+            "reason": _nullable(
+                "string",
+                "What changed underneath it, recomputed against the schema that "
+                "superseded it. Null while it is still valid, and null when no "
+                "stored version covers the moment it was invalidated.",
+            ),
+        },
+        "required": ["exemplar", "fingerprint", "reason"],
+        "additionalProperties": False,
+    },
 }
 """Shared definitions. A tool's schema references these; it never restates them."""
 

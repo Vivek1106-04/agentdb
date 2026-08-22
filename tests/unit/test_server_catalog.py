@@ -33,8 +33,18 @@ def test_the_catalog_advertises_the_spec_13_1_groups_in_order() -> None:
         "explain_plan",
         "explain_diff",
         "run_query",
+        "retrieve_exemplars",
+        "record_outcome",
+        "explain_exemplar_history",
         "mine_workload",
     )
+
+
+def test_the_memory_group_is_absent_where_no_store_can_answer_it() -> None:
+    """A tool that lists itself and then says "no store" costs a turn to learn nothing."""
+    catalog = build_catalog(clickhouse_hits_fixture())
+
+    assert "retrieve_exemplars" not in catalog.names
 
 
 def test_an_unknown_tool_names_the_tools_that_do_exist() -> None:

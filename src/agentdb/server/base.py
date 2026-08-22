@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from agentdb.adapters import Adapter, Capability, RelationRef
 from agentdb.config import Config
 from agentdb.core import ContextBuilder, PlanExplainer
+from agentdb.core.memory.store import ExemplarStore
 from agentdb.server.schemas import JsonValue
 
 Handler = Callable[[Mapping[str, JsonValue]], Awaitable[dict[str, JsonValue]]]
@@ -64,6 +65,13 @@ class ServerContext:
 
     adapter: Adapter
     config: Config = field(default_factory=Config)
+    store: ExemplarStore | None = None
+    """The exemplar store, when one is configured (SPEC §10).
+
+    Optional because the memory tools are only advertised where they can work: a
+    server run without Postgres serves the rest of the catalog rather than three
+    tools that fail on call.
+    """
 
     @property
     def builder(self) -> ContextBuilder:

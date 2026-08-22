@@ -43,6 +43,22 @@ CLICKHOUSE_ARGS: dict[str, Mapping[str, JsonValue]] = {
         "namespace": "agentdb",
     },
     "run_query": {"sql": "SELECT CounterID, count() AS hits FROM hits GROUP BY CounterID"},
+    "retrieve_exemplars": {
+        "question": "how many hits per counter?",
+        "namespace": "agentdb",
+        "relations": ["hits"],
+    },
+    "record_outcome": {
+        "namespace": "agentdb",
+        "question": "how many hits per counter?",
+        "sql": "SELECT CounterID, count() FROM hits GROUP BY CounterID",
+        "outcome": "success",
+        "bytes_read": 4096,
+    },
+    "explain_exemplar_history": {
+        "namespace": "agentdb",
+        "sql": "SELECT CounterID, count() FROM hits GROUP BY CounterID",
+    },
     "mine_workload": {"hours": 24, "top_n": 5},
 }
 
@@ -66,6 +82,22 @@ DATABRICKS_ARGS: dict[str, Mapping[str, JsonValue]] = {
         "namespace": "samples.tpch",
     },
     "run_query": {"sql": "SELECT count(*) FROM samples.tpch.lineitem"},
+    "retrieve_exemplars": {
+        "question": "how many line items shipped in 1995?",
+        "namespace": "samples.tpch",
+    },
+    "record_outcome": {
+        "namespace": "samples.tpch",
+        "question": "how many line items shipped in 1995?",
+        "sql": "SELECT count(*) FROM samples.tpch.lineitem WHERE l_shipdate > '1995-01-01'",
+        "outcome": "error",
+        "error_class": "semantic",
+        "error_text": "[UNRESOLVED_COLUMN] l_shipdate",
+    },
+    "explain_exemplar_history": {
+        "namespace": "samples.tpch",
+        "sql": "SELECT count(*) FROM samples.tpch.lineitem WHERE l_shipdate > '1995-01-01'",
+    },
     "mine_workload": {},
 }
 
