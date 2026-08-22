@@ -184,6 +184,31 @@ ranking is stable well before 50.
 EXEMPLAR_RECENCY_TAU_DAYS: Final = 30.0
 """Time constant of the exponential recency term in exemplar ranking (SPEC §10.4)."""
 
+EXEMPLAR_CANDIDATE_POOL: Final = 50
+"""Exemplars the vector index hands to the hybrid ranking (SPEC §10.4).
+
+The pool is what the four non-semantic terms re-order. Too small and a
+relation-perfect exemplar never reaches the ranking because its embedding did
+not place it in the top few; too large and every retrieval pays for rows the
+weights will discard. Fifty is ten times the default ``k``.
+"""
+
+EXEMPLAR_TOP_K: Final = 5
+"""Exemplars placed in the agent's context by default (SPEC §10.4).
+
+Context is the scarce resource under measurement: every exemplar displaces
+grounding that arms A0 to A3 established as useful, so ``k`` is a benchmark
+parameter and not a comfort setting.
+"""
+
+MEMORY_DSN: Final = "postgresql://agentdb:agentdb@localhost:55432/agentdb"
+"""Where the exemplar store lives — the Postgres of the project's own compose file.
+
+The port is the host mapping in ``docker/docker-compose.yml``, chosen to avoid a
+developer's local 5432. This is agentdb's private state store and never a system
+under test (SPEC §10.2).
+"""
+
 BOOTSTRAP_RESAMPLES: Final = 10_000
 """Bootstrap resamples behind every confidence interval in the report (SPEC §11.4)."""
 
@@ -262,6 +287,9 @@ class Config:
     max_result_rows: int = MAX_RESULT_ROWS
     max_index_candidates: int = MAX_INDEX_CANDIDATES
     exemplar_recency_tau_days: float = EXEMPLAR_RECENCY_TAU_DAYS
+    exemplar_candidate_pool: int = EXEMPLAR_CANDIDATE_POOL
+    exemplar_top_k: int = EXEMPLAR_TOP_K
+    memory_dsn: str = MEMORY_DSN
     bootstrap_resamples: int = BOOTSTRAP_RESAMPLES
     n_seeds: int = N_SEEDS
     retrieval_weights: RetrievalWeights = RetrievalWeights()
@@ -290,6 +318,8 @@ class Config:
         "max_result_rows",
         "max_index_candidates",
         "exemplar_recency_tau_days",
+        "exemplar_candidate_pool",
+        "exemplar_top_k",
         "bootstrap_resamples",
         "n_seeds",
     )
@@ -374,6 +404,11 @@ class Config:
             exemplar_recency_tau_days=_env_float(
                 source, "EXEMPLAR_RECENCY_TAU_DAYS", EXEMPLAR_RECENCY_TAU_DAYS
             ),
+            exemplar_candidate_pool=_env_int(
+                source, "EXEMPLAR_CANDIDATE_POOL", EXEMPLAR_CANDIDATE_POOL
+            ),
+            exemplar_top_k=_env_int(source, "EXEMPLAR_TOP_K", EXEMPLAR_TOP_K),
+            memory_dsn=_env_str(source, "MEMORY_DSN", MEMORY_DSN),
             bootstrap_resamples=_env_int(source, "BOOTSTRAP_RESAMPLES", BOOTSTRAP_RESAMPLES),
             n_seeds=_env_int(source, "N_SEEDS", N_SEEDS),
             retrieval_weights=RetrievalWeights.from_env(source),
@@ -387,6 +422,11 @@ def _lookup(env: Mapping[str, str], name: str) -> str | None:
         return None
     stripped = raw.strip()
     return stripped or None
+
+
+def _env_str(env: Mapping[str, str], name: str, default: str) -> str:
+    raw = _lookup(env, name)
+    return default if raw is None else raw
 
 
 def _env_int(env: Mapping[str, str], name: str, default: int) -> int:
