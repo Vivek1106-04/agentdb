@@ -21,6 +21,7 @@ from agentdb.core.advisor.base import (
 )
 from agentdb.core.advisor.clickhouse_advisor import ClickHouseAdvisor
 from agentdb.core.advisor.databricks_advisor import DatabricksAdvisor
+from agentdb.core.advisor.rewrites import rewrites, rewritten_query
 
 __all__ = [
     "ClickHouseAdvisor",
@@ -34,5 +35,7 @@ __all__ = [
     "Recommendation",
     "demand_from_queries",
     "rank",
+    "rewrites",
+    "rewritten_query",
     "workload_shapes",
 ]
