@@ -8,7 +8,14 @@ from typing import Any
 
 import pytest
 
-from agenteval.report import ReportError, compare_to_baseline, load_run, render, summarize
+from agenteval.report import (
+    ReportError,
+    compare_to_baseline,
+    contamination_check,
+    load_run,
+    render,
+    summarize,
+)
 
 
 def record(**overrides: Any) -> dict[str, Any]:
@@ -254,3 +261,47 @@ def test_a_family_s_run_with_no_baseline_says_so_instead_of_failing() -> None:
     assert "## Paired comparison" in rendered
     assert "no records for `A0_baseline`" in rendered
     assert "S5_claude_code" in rendered
+
+
+def test_the_contamination_check_splits_public_tasks_from_authored_ones() -> None:
+    """The check that separates this from a marketing benchmark (SPEC §11.4)."""
+    records = [
+        record(task_id="p1", tags=["clickbench_original"], execution_accuracy=True),
+        record(task_id="p2", tags=["clickbench_original"], execution_accuracy=True),
+        record(task_id="a1", tags=["authored"], execution_accuracy=True),
+        record(task_id="a2", tags=["authored"], execution_accuracy=False),
+    ]
+
+    found = contamination_check(records)
+
+    assert len(found) == 1
+    assert found[0].derived_accuracy == 1.0
+    assert found[0].authored_accuracy == 0.5
+    assert found[0].gap == 0.5
+
+
+def test_an_arm_that_ran_only_one_side_of_the_split_is_not_reported() -> None:
+    """A gap needs both denominators; one of them zero is not a finding."""
+    records = [record(task_id="p1", tags=["clickbench_original"], execution_accuracy=True)]
+
+    assert contamination_check(records) == ()
+
+
+def test_the_contamination_section_is_rendered_even_when_it_is_unflattering() -> None:
+    records = [
+        record(task_id="p1", tags=["clickbench_original"], execution_accuracy=True),
+        record(task_id="a1", tags=[], execution_accuracy=False),
+    ]
+
+    rendered = render(records, baseline="A0_baseline")
+
+    assert "## Contamination check" in rendered
+    assert "+100.0%" in rendered
+    assert "memorization" in rendered
+
+
+def test_the_section_says_so_when_the_split_is_not_computable() -> None:
+    """Silence would read as "no contamination", which is a different claim."""
+    rendered = render([record(task_id="p1", tags=["clickbench_original"])], baseline="A0_baseline")
+
+    assert "Not computable from this run" in rendered

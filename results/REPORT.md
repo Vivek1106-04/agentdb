@@ -21,6 +21,10 @@ is called: every number below is a function of the committed traces.
 
 No failures recorded.
 
+## Contamination check
+
+Not computable from this run: every arm covered only one side of the split. The check compares accuracy on tasks tagged `clickbench_original` — ClickBench's own published queries, public for years and plausibly in training data — against tasks authored for this suite.
+
 ## Paired comparison
 
 None: this run contains no records for `A0_baseline`, so the arms above are reported on their own terms. A delta needs both arms to have run the same cells.

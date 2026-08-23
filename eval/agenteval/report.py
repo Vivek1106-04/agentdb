@@ -142,6 +142,8 @@ def render(records: Sequence[Mapping[str, Any]], *, baseline: str | None = None)
         _render_leaderboard(summaries),
         "",
         _render_errors(summaries),
+        "",
+        _render_contamination(contamination_check(records)),
     ]
 
     reference = baseline or summaries[0].system
@@ -160,6 +162,109 @@ def render(records: Sequence[Mapping[str, Any]], *, baseline: str | None = None)
     if undeclared:
         sections += ["", undeclared]
     return "\n".join(sections) + "\n"
+
+
+CONTAMINATION_TAG = "clickbench_original"
+"""The tag marking a task derived from ClickBench's published queries.
+
+Those queries have been public for years and are very likely in training data.
+Tasks without the tag were authored for this project and are not (SPEC §11.4).
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class Contamination:
+    """One arm's accuracy on public tasks against its accuracy on authored ones."""
+
+    system: str
+    derived_correct: int
+    derived_total: int
+    authored_correct: int
+    authored_total: int
+
+    @property
+    def derived_accuracy(self) -> float:
+        return self.derived_correct / self.derived_total
+
+    @property
+    def authored_accuracy(self) -> float:
+        return self.authored_correct / self.authored_total
+
+    @property
+    def gap(self) -> float:
+        """Public minus authored. A large positive gap is the memorization signal."""
+        return self.derived_accuracy - self.authored_accuracy
+
+
+def contamination_check(records: Sequence[Mapping[str, Any]]) -> tuple[Contamination, ...]:
+    """Split each arm's tasks by whether the question predates this project.
+
+    The check that separates this from a marketing benchmark, and it is computed
+    even though it can only weaken the headline: if an arm scores far better on
+    ClickBench's own published queries than on questions written for this suite,
+    the difference is a fact about training data rather than about grounding.
+
+    Arms whose run covered only one side of the split are omitted rather than
+    reported with a denominator of zero.
+    """
+    by_system: dict[str, list[Mapping[str, Any]]] = {}
+    for record in records:
+        by_system.setdefault(str(record["system"]), []).append(record)
+
+    found: list[Contamination] = []
+    for system, rows in sorted(by_system.items()):
+        derived = [row for row in rows if CONTAMINATION_TAG in (row.get("tags") or ())]
+        authored = [row for row in rows if CONTAMINATION_TAG not in (row.get("tags") or ())]
+        if not derived or not authored:
+            continue
+        found.append(
+            Contamination(
+                system=system,
+                derived_correct=sum(1 for row in derived if row["execution_accuracy"]),
+                derived_total=len(derived),
+                authored_correct=sum(1 for row in authored if row["execution_accuracy"]),
+                authored_total=len(authored),
+            )
+        )
+    return tuple(found)
+
+
+def _render_contamination(found: Sequence[Contamination]) -> str:
+    """The section that exists to be published even when it is unflattering."""
+    if not found:
+        return "\n".join(
+            [
+                "## Contamination check",
+                "",
+                "Not computable from this run: every arm covered only one side of the "
+                f"split. The check compares accuracy on tasks tagged `{CONTAMINATION_TAG}` "
+                "— ClickBench's own published queries, public for years and plausibly in "
+                "training data — against tasks authored for this suite.",
+            ]
+        )
+
+    header = "| arm | public tasks | authored tasks | gap |"
+    divider = "|---|---|---|---|"
+    rows = [
+        f"| `{item.system}` | {item.derived_accuracy:.1%} "
+        f"({item.derived_correct}/{item.derived_total}) | "
+        f"{item.authored_accuracy:.1%} ({item.authored_correct}/{item.authored_total}) | "
+        f"{item.gap:+.1%} |"
+        for item in found
+    ]
+    return "\n".join(
+        [
+            "## Contamination check",
+            "",
+            "ClickBench's queries have been public for years and are plausibly in "
+            "training data; the authored questions are not. A large positive gap is a "
+            "fact about memorization rather than about grounding (SPEC §11.4).",
+            "",
+            header,
+            divider,
+            *rows,
+        ]
+    )
 
 
 def _render_absent_baseline(baseline: str) -> str:
