@@ -20,11 +20,13 @@ from agentdb.core.advisor.base import (
     workload_shapes,
 )
 from agentdb.core.advisor.clickhouse_advisor import ClickHouseAdvisor
+from agentdb.core.advisor.databricks_advisor import DatabricksAdvisor
 
 __all__ = [
     "ClickHouseAdvisor",
     "ColumnDemand",
     "Confidence",
+    "DatabricksAdvisor",
     "Demand",
     "EffectEstimate",
     "Evidence",
