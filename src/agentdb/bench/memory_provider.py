@@ -119,6 +119,10 @@ class MemoryContextProvider:
         """Delegated: these arms are A3 plus memory, and A3 is where the plan lives."""
         return await self.base.explain_plan(sql=sql, namespace=namespace)
 
+    async def aclose(self) -> None:
+        """Release the engine connection underneath. The store's outlives the run."""
+        await self.base.aclose()
+
     async def _sync(self, namespace: str, built: GroundedContext) -> None:
         """Fingerprint the namespace once per run, invalidating what it broke.
 

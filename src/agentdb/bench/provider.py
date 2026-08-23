@@ -88,6 +88,18 @@ class GroundedContextProvider:
             self._cache[namespace] = cached
         return cached
 
+    async def aclose(self) -> None:
+        """Close the engine connection this provider opened.
+
+        A benchmark builds one provider per arm and runs hundreds of tasks
+        through it, so the connection outlives every task and nothing else is in
+        a position to release it.
+        """
+        client = getattr(self.builder.adapter, "client", None)
+        closer = getattr(client, "close", None)
+        if closer is not None:
+            await closer()
+
     async def explain_plan(self, *, sql: str, namespace: str) -> str | None:
         """What the engine would do with ``sql``, or ``None`` when nothing is wrong.
 

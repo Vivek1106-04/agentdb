@@ -341,12 +341,28 @@ async def run_bench(
     finally:
         for session in sessions:
             await session.close()
+        await _close_providers(systems)
         await executor.aclose()
 
     for line in summarize(cells):
         write(line)
     write(f"traces: {writer.path}")
     return cells
+
+
+async def _close_providers(systems: Sequence[SystemUnderTest]) -> None:
+    """Release any connection a Family A provider opened for itself.
+
+    Structural, like everything else across this seam: a provider that holds a
+    connection says so by offering ``aclose``, and one that does not is left
+    alone. Without this a full matrix leaks one engine connection per arm, which
+    a five-seed run turns into a warning storm and an operator into a bug report.
+    """
+    for system in systems:
+        provider = getattr(system, "provider", None)
+        closer = getattr(provider, "aclose", None)
+        if closer is not None:
+            await closer()
 
 
 def run_report(options: ReportOptions, *, write: Writer) -> str:

@@ -113,6 +113,9 @@ class AdvisedContextProvider:
     async def explain_plan(self, *, sql: str, namespace: str) -> str | None:
         return await self.base.explain_plan(sql=sql, namespace=namespace)
 
+    async def aclose(self) -> None:
+        await self.base.aclose()
+
     def _advise(self, built: GroundedContext) -> str:
         """Run the engine's advisor over every relation the payload describes.
 

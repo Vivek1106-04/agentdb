@@ -305,3 +305,23 @@ async def test_the_dotted_path_factory_can_build_a_reviewing_provider(
     )
 
     assert provider.explainer is not None
+
+
+async def test_closing_a_provider_releases_the_connection_it_opened() -> None:
+    """A matrix builds one provider per arm; nothing else can release its connection."""
+    closed: list[bool] = []
+    client = SimpleNamespace(query=None, close=lambda: _record(closed))
+    provider = build_provider(adapter=ClickHouseAdapter(client=cast(Any, client)))
+
+    await provider.aclose()
+
+    assert closed == [True]
+
+
+async def test_closing_a_provider_over_a_client_with_no_close_is_a_no_op() -> None:
+    """The fake adapter in these tests has no connection to release, and must not care."""
+    await build_provider(adapter=clickhouse_hits_fixture()).aclose()
+
+
+async def _record(closed: list[bool]) -> None:
+    closed.append(True)

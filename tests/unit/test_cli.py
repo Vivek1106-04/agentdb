@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -17,6 +18,7 @@ from agenteval.cli import (
     CliError,
     FreezeOptions,
     ReportOptions,
+    _close_providers,
     build_systems,
     client_for,
     default_client,
@@ -661,3 +663,26 @@ async def test_asking_for_plan_review_from_a_provider_that_cannot_is_refused() -
 
     with pytest.raises(CliError, match="cannot explain a plan"):
         await _build(["A3_plan"], providers={"A3_plan": config})
+
+
+async def test_a_run_releases_the_connection_every_arm_opened_for_itself() -> None:
+    """A five-seed matrix would otherwise leak one engine connection per arm."""
+    closed: list[str] = []
+
+    class ClosingProvider:
+        name = "agentdb/A2_layout"
+        version = "1.0"
+        fingerprint = "sha256:closing"
+
+        async def context(self, *, namespace: str, question: str) -> str:
+            return "context"
+
+        async def aclose(self) -> None:
+            closed.append(self.name)
+
+    system = SimpleNamespace(provider=ClosingProvider())
+    plain = SimpleNamespace()
+
+    await _close_providers([cast(Any, system), cast(Any, plain)])
+
+    assert closed == ["agentdb/A2_layout"]

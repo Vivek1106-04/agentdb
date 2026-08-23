@@ -197,3 +197,7 @@ def test_a_databricks_namespace_is_advised_by_the_databricks_advisor() -> None:
     provider = build_advised_provider(base=memory, workload="tpch")
 
     assert provider.base.base.builder.adapter.engine == "databricks"
+
+
+async def test_closing_a6_closes_the_whole_ladder_beneath_it() -> None:
+    await advised().aclose()

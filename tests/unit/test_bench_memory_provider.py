@@ -193,3 +193,9 @@ async def test_the_factory_wires_a_store_and_applies_its_schema() -> None:
     assert memory.name == "agentdb/A5_negmemory"
     assert memory.base.name == "agentdb/A5_negmemory/base"
     assert "CREATE TABLE IF NOT EXISTS agentdb_exemplar" in live.statements[0][0]
+
+
+async def test_closing_the_memory_arm_closes_the_grounding_beneath_it() -> None:
+    memory = provider()
+
+    await memory.aclose()  # the fake adapter holds no connection; this must still be safe
