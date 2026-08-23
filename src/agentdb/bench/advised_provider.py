@@ -36,6 +36,7 @@ from agentdb.bench.memory_provider import (
     Connector,
     MemoryContextProvider,
     clickhouse_memory_provider,
+    databricks_memory_provider,
 )
 from agentdb.bench.provider import fingerprint_config
 from agentdb.core.advisor import (
@@ -203,3 +204,32 @@ def _digest(statements: Sequence[str]) -> str:
     """Hash of the workload text, so a changed reference workload changes the arm."""
     joined = "\n".join(statements).encode("utf-8")
     return hashlib.sha256(joined).hexdigest()
+
+
+async def databricks_advised_provider(
+    *,
+    workload: str = "tpch",
+    name: str | None = None,
+    k: int | None = None,
+    dsn: str | None = None,
+    connector: Connector = connect,
+    importer: Importer = importlib.import_module,
+) -> AdvisedContextProvider:
+    """``A6_full`` against a Databricks warehouse.
+
+    Defaults to the TPC-H reference workload because that is what the
+    cross-engine suite measures on this side. The same argument as the
+    ClickHouse arm applies to why it is a committed file rather than the query
+    history: ``system.query.history`` on a benchmark workspace holds this
+    project's own gold executions.
+    """
+    arm = name or "agentdb/A6_full"
+    base = await databricks_memory_provider(
+        include_failures=True,
+        name=f"{arm}/A5",
+        k=k,
+        dsn=dsn,
+        connector=connector,
+        importer=importer,
+    )
+    return build_advised_provider(base=base, workload=workload, name=arm)

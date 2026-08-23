@@ -221,6 +221,9 @@ def test_the_shipped_provider_catalogue_is_keyed_by_arm() -> None:
         "A6_full",
         "S5_agentdb",
     ]
+    assert select_provider(
+        "A6_full", load_provider_configs(Path("eval/providers.yaml")), "databricks"
+    )
 
 
 async def test_an_arm_that_does_not_exist_yet_is_named() -> None:
@@ -741,7 +744,7 @@ def test_the_shipped_catalogue_covers_the_a0_to_a3_ladder_on_both_engines() -> N
     """SPEC M3.5: arms A0 to A3 are measured on Databricks, not only on ClickHouse."""
     configs = load_provider_configs(Path("eval/providers.yaml"))
 
-    for arm in ("A1_stats", "A2_layout", "A3_plan"):
+    for arm in ("A1_stats", "A2_layout", "A3_plan", "A4_memory", "A5_negmemory", "A6_full"):
         for engine in ("clickhouse", "databricks"):
             assert select_provider(arm, configs, engine) is not None, f"{arm} on {engine}"
 

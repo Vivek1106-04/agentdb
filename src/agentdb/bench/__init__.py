@@ -11,11 +11,13 @@ from agentdb.bench.advised_provider import (
     AdvisedContextProvider,
     build_advised_provider,
     clickhouse_advised_provider,
+    databricks_advised_provider,
 )
 from agentdb.bench.memory_provider import (
     MemoryContextProvider,
     build_memory_provider,
     clickhouse_memory_provider,
+    databricks_memory_provider,
 )
 from agentdb.bench.provider import (
     GroundedContextProvider,
@@ -34,5 +36,7 @@ __all__ = [
     "clickhouse_advised_provider",
     "clickhouse_memory_provider",
     "clickhouse_provider",
+    "databricks_advised_provider",
+    "databricks_memory_provider",
     "databricks_provider",
 ]

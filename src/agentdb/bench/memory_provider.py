@@ -31,6 +31,7 @@ from agentdb.adapters.clickhouse_client import Importer
 from agentdb.bench.provider import (
     GroundedContextProvider,
     clickhouse_provider,
+    databricks_provider,
     fingerprint_config,
 )
 from agentdb.core import GroundingLevel
@@ -204,6 +205,39 @@ async def clickhouse_memory_provider(
         plan_review=plan_review,
         name=f"{arm}/base",
         importer=importer,
+    )
+    store = ExemplarStore(connector(dsn))
+    store.ensure_schema()
+    return build_memory_provider(
+        base=base,
+        store=store,
+        include_failures=include_failures,
+        name=arm,
+        k=k,
+    )
+
+
+async def databricks_memory_provider(
+    *,
+    include_failures: bool = False,
+    name: str | None = None,
+    k: int | None = None,
+    dsn: str | None = None,
+    level: str = GroundingLevel.LAYOUT.value,
+    plan_review: bool = True,
+    connector: Connector = connect,
+    importer: Importer = importlib.import_module,
+) -> MemoryContextProvider:
+    """``A4_memory`` / ``A5_negmemory`` against a Databricks warehouse.
+
+    The store is the same Postgres either way — it is agentdb's own state, not
+    the engine's — but the exemplars in it are keyed by engine, so a warehouse
+    run never retrieves a ClickHouse query and vice versa. That separation is
+    what makes the cross-engine memory arms comparable rather than contaminated.
+    """
+    arm = name or ("agentdb/A5_negmemory" if include_failures else "agentdb/A4_memory")
+    base = await databricks_provider(
+        level=level, plan_review=plan_review, name=f"{arm}/base", importer=importer
     )
     store = ExemplarStore(connector(dsn))
     store.ensure_schema()

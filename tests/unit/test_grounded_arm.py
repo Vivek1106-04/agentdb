@@ -241,21 +241,20 @@ def test_the_shipped_catalogue_names_the_family_a_arms(tmp_path: Path) -> None:
         ("A4_memory", "clickhouse"),
         ("A5_negmemory", "clickhouse"),
         ("A6_full", "clickhouse"),
+        ("A4_memory", "databricks"),
+        ("A5_negmemory", "databricks"),
+        ("A6_full", "databricks"),
+        ("S5_agentdb", "databricks"),
         ("S5_agentdb", "clickhouse"),
     ]
     assert all(config.provider.startswith("agentdb.bench.") for config in configs)
     assert configs[0].options["level"] == "stats"
     assert [config.plan_review for config in configs] == [
-        False,
-        False,
-        True,
-        False,
-        False,
-        True,
-        True,
-        True,
-        True,
-        True,
+        *(False, False, True),  # ClickHouse A1 to A3
+        *(False, False, True),  # Databricks A1 to A3
+        *(True, True, True),  # ClickHouse A4 to A6
+        *(True, True, True, True),  # Databricks A4 to A6, then S5
+        True,  # ClickHouse S5
     ]
 
 

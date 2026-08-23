@@ -262,3 +262,33 @@ async def test_the_family_a_arms_ground_against_the_warehouse_not_the_other_engi
     assert "table format: delta" in payload
     assert "CREATE TABLE" in payload
     assert review is None or isinstance(review, str)
+
+
+async def test_the_memory_and_advice_arms_build_against_the_warehouse() -> None:
+    """A4 to A6 on Databricks: the cross-engine half of the ladder (SPEC §11.3).
+
+    The exemplar store is the same Postgres either way — it is agentdb's own
+    state, not the engine's — but exemplars are keyed by engine, so a warehouse
+    run can never retrieve a ClickHouse query. Without that the cross-engine
+    memory arms would be comparing contaminated pools.
+    """
+    from agentdb.bench import databricks_advised_provider
+    from agentdb.core.advisor.render import HEADER
+
+    try:
+        provider = await databricks_advised_provider()
+    except Exception as exc:
+        pytest.skip(f"A6 needs the exemplar store as well as the warehouse ({exc})")
+
+    try:
+        payload = await provider.context(
+            namespace=f"{CATALOG}.{SCHEMA}", question="how many line items shipped in 1995?"
+        )
+    finally:
+        await provider.aclose()
+
+    assert "table format: delta" in payload, "still the A2 grounding underneath"
+    assert provider.base.include_failures is True, "A6 sits on A5, negatives included"
+    if HEADER in payload:
+        advice = payload[payload.index(HEADER) :]
+        assert "ALTER TABLE" not in advice, "the fact, never the migration"

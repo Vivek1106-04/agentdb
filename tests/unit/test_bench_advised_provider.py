@@ -18,6 +18,7 @@ from agentdb.bench.advised_provider import (
     AdvisedContextProvider,
     build_advised_provider,
     clickhouse_advised_provider,
+    databricks_advised_provider,
     load_workload,
 )
 from agentdb.core.advisor.render import HEADER
@@ -201,3 +202,30 @@ def test_a_databricks_namespace_is_advised_by_the_databricks_advisor() -> None:
 
 async def test_closing_a6_closes_the_whole_ladder_beneath_it() -> None:
     await advised().aclose()
+
+
+async def test_the_databricks_a6_factory_defaults_to_the_tpch_workload() -> None:
+    """The cross-engine suite is TPC-H on this side, so that is the demand signal."""
+    live = store_connection()
+    workspace = SimpleNamespace(
+        statement_execution=SimpleNamespace(), query_history=SimpleNamespace()
+    )
+    sdk = SimpleNamespace(
+        WorkspaceClient=lambda **_: workspace,
+        StatementParameterListItem=dict,
+        QueryFilter=dict,
+    )
+
+    import os
+
+    os.environ.setdefault("AGENTDB_DBX_HOST", "https://example.cloud.databricks.com")
+    os.environ.setdefault("AGENTDB_DBX_WAREHOUSE_ID", "wh-1")
+
+    provider = await databricks_advised_provider(
+        connector=lambda _dsn: cast(Connection, live),
+        importer=lambda _name: cast(ModuleType, sdk),
+    )
+
+    assert provider.base.base.builder.adapter.engine == "databricks"
+    assert provider.workload == load_workload("tpch")
+    assert provider.base.include_failures is True

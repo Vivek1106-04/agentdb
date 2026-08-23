@@ -20,6 +20,7 @@ from agentdb.bench.memory_provider import (
     MemoryContextProvider,
     build_memory_provider,
     clickhouse_memory_provider,
+    databricks_memory_provider,
 )
 from agentdb.config import Config, RetrievalWeights
 from agentdb.core.memory.models import Outcome
@@ -199,3 +200,35 @@ async def test_closing_the_memory_arm_closes_the_grounding_beneath_it() -> None:
     memory = provider()
 
     await memory.aclose()  # the fake adapter holds no connection; this must still be safe
+
+
+async def test_the_databricks_factory_builds_the_same_arm_against_a_warehouse() -> None:
+    """The memory arms are cross-engine: the store is shared, the exemplars are not."""
+    live = connection()
+
+    async def get_async_client(**_: Any) -> object:  # the SDK path, not the CH driver
+        return SimpleNamespace()
+
+    workspace = SimpleNamespace(
+        statement_execution=SimpleNamespace(), query_history=SimpleNamespace()
+    )
+    sdk = SimpleNamespace(
+        WorkspaceClient=lambda **_: workspace,
+        StatementParameterListItem=dict,
+        QueryFilter=dict,
+        get_async_client=get_async_client,
+    )
+
+    import os
+
+    os.environ.setdefault("AGENTDB_DBX_HOST", "https://example.cloud.databricks.com")
+    os.environ.setdefault("AGENTDB_DBX_WAREHOUSE_ID", "wh-1")
+
+    memory = await databricks_memory_provider(
+        include_failures=True,
+        connector=lambda _dsn: cast(Connection, live),
+        importer=lambda _name: cast(ModuleType, sdk),
+    )
+
+    assert memory.base.builder.adapter.engine == "databricks"
+    assert memory.include_failures is True
