@@ -23,6 +23,9 @@ from dataclasses import dataclass, field
 from agentdb.adapters.base import Adapter
 from agentdb.adapters.clickhouse import ClickHouseAdapter
 from agentdb.adapters.clickhouse_client import ClickHouseTarget, Importer, build_client
+from agentdb.adapters.databricks import DatabricksAdapter
+from agentdb.adapters.databricks_client import DatabricksTarget
+from agentdb.adapters.databricks_client import build_client as build_databricks_client
 from agentdb.config import Config
 from agentdb.core import ContextBuilder, GroundedContext, GroundingLevel, PlanExplainer
 
@@ -141,6 +144,35 @@ async def clickhouse_provider(
     client = await build_client(target, importer=importer)
     return build_provider(
         adapter=ClickHouseAdapter(client=client),
+        level=level,
+        name=name,
+        plan_review=plan_review,
+    )
+
+
+async def databricks_provider(
+    *,
+    level: str = GroundingLevel.LAYOUT.value,
+    name: str | None = None,
+    plan_review: bool = False,
+    importer: Importer = importlib.import_module,
+) -> GroundedContextProvider:
+    """Build a provider against a live Databricks SQL warehouse.
+
+    The Databricks twin of :func:`clickhouse_provider`, and it exists for a
+    reason worth stating: without it a Family A arm run with ``--engine
+    databricks`` would load the ClickHouse factory and ground the model in
+    ClickHouse's tables while executing against the warehouse. That run
+    completes. Its numbers are nonsense. An arm is a provider *pointed at an
+    engine*, so each engine needs its own entry.
+
+    Credentials come from ``AGENTDB_DBX_*`` only — never from a benchmark config,
+    where a warehouse token would end up in a committed file (SPEC §13.3).
+    """
+    target = DatabricksTarget.from_env()
+    client = await build_databricks_client(target, importer=importer)
+    return build_provider(
+        adapter=DatabricksAdapter(client=client, catalog=target.catalog),
         level=level,
         name=name,
         plan_review=plan_review,

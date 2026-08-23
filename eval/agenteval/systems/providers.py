@@ -44,6 +44,15 @@ class ProviderConfig:
 
     arm: str
     provider: str
+    engine: str | None = None
+    """Which engine this entry grounds against. ``None`` means either.
+
+    Load-bearing: a Family A arm is a *provider* pointed at an engine, and the
+    ClickHouse factory pointed at a Databricks run would ground against
+    ClickHouse's tables while executing on the warehouse. That failure is silent
+    — the run completes and the numbers are wrong — so an arm is selected by
+    (name, engine) and a missing pairing is an error rather than a fallback."""
+
     options: Mapping[str, Any] = field(default_factory=dict)
     plan_review: bool = False
     """Whether the arm shows the model its plan before the query runs (``A3``).
@@ -70,21 +79,22 @@ def load_provider_configs(path: Path) -> tuple[ProviderConfig, ...]:
         raise ProviderError(f"{path} must contain a list of provider configs")
 
     configs = tuple(_parse(entry, path) for entry in document)
-    arms = [config.arm for config in configs]
-    duplicates = sorted({arm for arm in arms if arms.count(arm) > 1})
+    keys = [(config.arm, config.engine) for config in configs]
+    duplicates = sorted({arm for arm, engine in keys if keys.count((arm, engine)) > 1})
     if duplicates:
-        raise ProviderError(f"{path} defines {', '.join(duplicates)} more than once")
+        raise ProviderError(f"{path} defines {', '.join(duplicates)} more than once for one engine")
     return configs
 
 
 def _parse(payload: Mapping[str, Any], path: Path) -> ProviderConfig:
-    allowed = {"arm", "provider", "options", "plan_review"}
+    allowed = {"arm", "provider", "engine", "options", "plan_review"}
     unknown = sorted(set(payload) - allowed)
     if unknown:
         raise ProviderError(f"{path}: provider config has unknown field(s): {', '.join(unknown)}")
     return ProviderConfig(
         arm=str(payload.get("arm", "")),
         provider=str(payload.get("provider", "")),
+        engine=str(payload["engine"]) if payload.get("engine") else None,
         options=dict(payload.get("options", {})),
         plan_review=bool(payload.get("plan_review", False)),
     )

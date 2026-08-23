@@ -23,7 +23,12 @@ from agentdb.adapters.clickhouse_client import (
     ClickHouseTarget,
     build_client,
 )
-from agentdb.bench import GroundedContextProvider, build_provider, clickhouse_provider
+from agentdb.bench import (
+    GroundedContextProvider,
+    build_provider,
+    clickhouse_provider,
+    databricks_provider,
+)
 from agentdb.config import Config
 from agentdb.core import GroundingLevel
 from tests.fakes import clickhouse_hits_fixture
@@ -325,3 +330,33 @@ async def test_closing_a_provider_over_a_client_with_no_close_is_a_no_op() -> No
 
 async def _record(closed: list[bool]) -> None:
     closed.append(True)
+
+
+async def test_the_databricks_factory_grounds_against_the_warehouse_it_was_told_about(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without this factory a --engine databricks run would ground against ClickHouse."""
+    monkeypatch.setenv("AGENTDB_DBX_HOST", "https://example.cloud.databricks.com")
+    monkeypatch.setenv("AGENTDB_DBX_WAREHOUSE_ID", "wh-1")
+    monkeypatch.setenv("AGENTDB_DBX_TOKEN", "token")
+    monkeypatch.setenv("AGENTDB_DBX_CATALOG", "measured")
+
+    workspace = SimpleNamespace(
+        statement_execution=SimpleNamespace(),
+        query_history=SimpleNamespace(),
+    )
+    sdk = SimpleNamespace(
+        WorkspaceClient=lambda **_: workspace,
+        StatementParameterListItem=dict,
+        QueryFilter=dict,
+    )
+
+    provider = await databricks_provider(
+        level="layout",
+        name="agentdb/A2_layout",
+        importer=lambda _name: cast(ModuleType, sdk),
+    )
+
+    assert provider.builder.adapter.engine == "databricks"
+    assert provider.name == "agentdb/A2_layout"
+    assert provider.level is GroundingLevel.LAYOUT

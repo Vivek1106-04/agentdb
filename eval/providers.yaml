@@ -7,20 +7,51 @@
 #
 # A0_baseline and A7_oracle are built in — they need no grounding layer at all.
 
+# Every entry names the engine it grounds against. An arm is a provider pointed
+# at an engine: the ClickHouse factory in a --engine databricks run would ground
+# the model in ClickHouse's tables while executing on the warehouse, and that run
+# completes with numbers nobody can reproduce. A missing pairing is an error.
+
 - arm: A1_stats
+  engine: clickhouse
   provider: agentdb.bench.provider:clickhouse_provider
   options:
     level: stats
     name: agentdb/A1_stats
 
 - arm: A2_layout
+  engine: clickhouse
   provider: agentdb.bench.provider:clickhouse_provider
   options:
     level: layout
     name: agentdb/A2_layout
 
 - arm: A3_plan
+  engine: clickhouse
   provider: agentdb.bench.provider:clickhouse_provider
+  plan_review: true
+  options:
+    level: layout
+    name: agentdb/A3_plan
+    plan_review: true
+
+- arm: A1_stats
+  engine: databricks
+  provider: agentdb.bench.provider:databricks_provider
+  options:
+    level: stats
+    name: agentdb/A1_stats
+
+- arm: A2_layout
+  engine: databricks
+  provider: agentdb.bench.provider:databricks_provider
+  options:
+    level: layout
+    name: agentdb/A2_layout
+
+- arm: A3_plan
+  engine: databricks
+  provider: agentdb.bench.provider:databricks_provider
   plan_review: true
   options:
     level: layout
@@ -38,12 +69,14 @@
 # Postgres exists.
 
 - arm: A4_memory
+  engine: clickhouse
   provider: agentdb.bench.memory_provider:clickhouse_memory_provider
   plan_review: true
   options:
     name: agentdb/A4_memory
 
 - arm: A5_negmemory
+  engine: clickhouse
   provider: agentdb.bench.memory_provider:clickhouse_memory_provider
   plan_review: true
   options:
@@ -60,6 +93,7 @@
 # advisor against a representative workload, not the operator's real one.
 
 - arm: A6_full
+  engine: clickhouse
   provider: agentdb.bench.advised_provider:clickhouse_advised_provider
   plan_review: true
   options:

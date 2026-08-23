@@ -229,3 +229,36 @@ async def test_the_system_table_is_too_far_behind_to_attribute_a_live_statement(
         f"system.query.history is only {seconds}s behind; it may now be usable for "
         "inline attribution, which would remove the need for the history API"
     )
+
+
+# --------------------------------------------------------------------------
+# the Family A ladder on the warehouse (SPEC M3.5)
+# --------------------------------------------------------------------------
+
+
+async def test_the_family_a_arms_ground_against_the_warehouse_not_the_other_engine(
+    lineitem: RelationRef,
+) -> None:
+    """M3.5's definition of done: arms A0 to A3 measured on Databricks.
+
+    The failure this guards against is silent. Until each arm named the engine it
+    grounds against, a --engine databricks run loaded the ClickHouse factory,
+    described ClickHouse's tables to the model, executed the answer on the
+    warehouse, and reported a number.
+    """
+    from agentdb.bench import databricks_provider
+
+    provider = await databricks_provider(level="layout", plan_review=True)
+    try:
+        payload = await provider.context(
+            namespace=f"{CATALOG}.{SCHEMA}", question="how many line items shipped in 1995?"
+        )
+        review = await provider.explain_plan(sql=PROBE_SQL, namespace=f"{CATALOG}.{SCHEMA}")
+    finally:
+        await provider.aclose()
+
+    assert provider.builder.adapter.engine == "databricks"
+    assert lineitem.name in payload
+    assert "table format: delta" in payload
+    assert "CREATE TABLE" in payload
+    assert review is None or isinstance(review, str)

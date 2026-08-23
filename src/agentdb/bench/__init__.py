@@ -21,6 +21,7 @@ from agentdb.bench.provider import (
     GroundedContextProvider,
     build_provider,
     clickhouse_provider,
+    databricks_provider,
 )
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "clickhouse_advised_provider",
     "clickhouse_memory_provider",
     "clickhouse_provider",
+    "databricks_provider",
 ]

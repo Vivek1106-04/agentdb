@@ -231,17 +231,23 @@ async def test_something_that_is_not_a_provider_is_refused_with_the_shape_it_nee
 def test_the_shipped_catalogue_names_the_family_a_arms(tmp_path: Path) -> None:
     configs = load_provider_configs(Path("eval/providers.yaml"))
 
-    assert [config.arm for config in configs] == [
-        "A1_stats",
-        "A2_layout",
-        "A3_plan",
-        "A4_memory",
-        "A5_negmemory",
-        "A6_full",
+    assert [(config.arm, config.engine) for config in configs] == [
+        ("A1_stats", "clickhouse"),
+        ("A2_layout", "clickhouse"),
+        ("A3_plan", "clickhouse"),
+        ("A1_stats", "databricks"),
+        ("A2_layout", "databricks"),
+        ("A3_plan", "databricks"),
+        ("A4_memory", "clickhouse"),
+        ("A5_negmemory", "clickhouse"),
+        ("A6_full", "clickhouse"),
     ]
     assert all(config.provider.startswith("agentdb.bench.") for config in configs)
     assert configs[0].options["level"] == "stats"
     assert [config.plan_review for config in configs] == [
+        False,
+        False,
+        True,
         False,
         False,
         True,

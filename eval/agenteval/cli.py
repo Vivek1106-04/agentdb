@@ -220,6 +220,29 @@ def load_grounded_configs(path: Path) -> dict[str, ProviderConfig]:
     return {config.arm: config for config in load_provider_configs(path)}
 
 
+def load_provider_catalogue(path: Path) -> tuple[ProviderConfig, ...]:
+    """Every Family A entry in ``path``. A missing file means A0 and A7 only."""
+    return load_provider_configs(path) if path.is_file() else ()
+
+
+def select_provider(
+    arm: str, configs: Sequence[ProviderConfig], engine: Engine
+) -> ProviderConfig | None:
+    """The entry for ``arm`` on ``engine``: engine-specific first, then either-engine.
+
+    An arm defined only for the other engine returns ``None`` and the caller
+    refuses the run. Falling back to it would ground against ClickHouse while
+    executing on a warehouse — a run that completes and reports numbers nobody
+    could reproduce.
+    """
+    named = [config for config in configs if config.arm == arm]
+    exact = [config for config in named if config.engine == engine]
+    if exact:
+        return exact[0]
+    generic = [config for config in named if config.engine is None]
+    return generic[0] if generic else None
+
+
 async def build_systems(
     arms: Sequence[str],
     executor: QueryExecutor,
@@ -227,9 +250,10 @@ async def build_systems(
     client: ModelClient,
     tool_client: ToolClientFactory,
     servers: Mapping[str, McpServerConfig],
-    providers: Mapping[str, ProviderConfig],
+    providers: Sequence[ProviderConfig],
     connector: Connector,
     sessions: list[McpSession],
+    engine: Engine = DEFAULT_ENGINE,
 ) -> tuple[SystemUnderTest, ...]:
     """Construct each named arm, refusing names that do not exist yet.
 
@@ -241,7 +265,8 @@ async def build_systems(
     requires an API key: a run of Family A arms alone must not fail on a
     credential no arm in it uses.
     """
-    known = {*ARMS, *servers, *providers}
+    grounded = {config.arm for config in providers}
+    known = {*ARMS, *servers, *grounded}
     unknown = [arm for arm in arms if arm not in known]
     if unknown:
         raise CliError(f"unknown arm(s) {unknown}; available: {sorted(known)}")
@@ -251,8 +276,15 @@ async def build_systems(
         if arm in ARMS:
             built.append(ARMS[arm](executor, client))
             continue
-        if arm in providers:
-            built.append(await build_grounded(arm, providers[arm], executor, client))
+        if arm in grounded:
+            config = select_provider(arm, providers, engine)
+            if config is None:
+                raise CliError(
+                    f"arm {arm} has no provider configured for {engine}; "
+                    "add an entry naming that engine rather than letting it ground "
+                    "against the other one"
+                )
+            built.append(await build_grounded(arm, config, executor, client))
             continue
         session = await connector(servers[arm])
         sessions.append(session)
@@ -322,9 +354,10 @@ async def run_bench(
             client=client_factory(),
             tool_client=tool_client_factory,
             servers=load_server_configs(options.servers),
-            providers=load_grounded_configs(options.providers),
+            providers=load_provider_catalogue(options.providers),
             connector=connector,
             sessions=sessions,
+            engine=options.engine,
         )
         run_id = new_run_id()
         spec = RunSpec(

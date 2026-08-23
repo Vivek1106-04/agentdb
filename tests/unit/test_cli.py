@@ -31,6 +31,7 @@ from agenteval.cli import (
     parse_model,
     run_bench,
     run_report,
+    select_provider,
     summarize,
 )
 from agenteval.engines.connect import EngineConnectionError
@@ -46,7 +47,7 @@ from agenteval.runner import Cell
 from agenteval.scorer import Score
 from agenteval.systems.base import SystemUnderTest
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
-from agenteval.systems.providers import ProviderConfig
+from agenteval.systems.providers import ProviderConfig, load_provider_configs
 from agenteval.systems.raw_schema import ARM_NAME
 from agenteval.tasks import load_suite
 from agenteval.traces import read_records
@@ -150,7 +151,7 @@ async def _build(arms: list[str], **overrides: object) -> tuple[SystemUnderTest,
         "client": ScriptedModelClient(),
         "tool_client": StubToolClient,
         "servers": {},
-        "providers": {},
+        "providers": (),
         "connector": _refuse_to_connect,
         "sessions": [],
     }
@@ -199,7 +200,7 @@ async def test_a_family_a_arm_is_built_from_its_provider_config() -> None:
         options={"name": "agentdb/A1_stats"},
     )
 
-    systems = await _build(["A1_stats"], providers={"A1_stats": config})
+    systems = await _build(["A1_stats"], providers=(config,))
 
     assert [system.name for system in systems] == ["A1_stats"]
 
@@ -649,7 +650,7 @@ async def test_a_plan_review_arm_is_built_when_the_provider_can_explain_one() ->
         plan_review=True,
     )
 
-    systems = await _build(["A3_plan"], providers={"A3_plan": config})
+    systems = await _build(["A3_plan"], providers=(config,))
 
     assert [system.name for system in systems] == ["A3_plan"]
 
@@ -662,7 +663,7 @@ async def test_asking_for_plan_review_from_a_provider_that_cannot_is_refused() -
     )
 
     with pytest.raises(CliError, match="cannot explain a plan"):
-        await _build(["A3_plan"], providers={"A3_plan": config})
+        await _build(["A3_plan"], providers=(config,))
 
 
 async def test_a_run_releases_the_connection_every_arm_opened_for_itself() -> None:
@@ -686,3 +687,59 @@ async def test_a_run_releases_the_connection_every_arm_opened_for_itself() -> No
     await _close_providers([cast(Any, system), cast(Any, plain)])
 
     assert closed == ["agentdb/A2_layout"]
+
+
+async def test_an_arm_grounds_against_the_engine_the_run_is_measuring() -> None:
+    """The ClickHouse factory in a Databricks run would ground against the wrong tables."""
+    clickhouse = ProviderConfig(
+        arm="A2_layout",
+        engine="clickhouse",
+        provider="tests.unit.test_cli:stub_provider_factory",
+        options={"name": "agentdb/clickhouse"},
+    )
+    databricks = ProviderConfig(
+        arm="A2_layout",
+        engine="databricks",
+        provider="tests.unit.test_cli:stub_provider_factory",
+        options={"name": "agentdb/databricks"},
+    )
+
+    chosen = select_provider("A2_layout", [clickhouse, databricks], "databricks")
+
+    assert chosen is not None
+    assert chosen.options["name"] == "agentdb/databricks"
+
+
+def test_an_entry_with_no_engine_serves_either() -> None:
+    """A third party's grounding service may well be engine-neutral."""
+    generic = ProviderConfig(arm="A2_layout", provider="anyone:factory")
+
+    assert select_provider("A2_layout", [generic], "databricks") is generic
+    assert select_provider("A2_layout", [generic], "clickhouse") is generic
+
+
+def test_an_arm_defined_only_for_the_other_engine_is_not_substituted() -> None:
+    clickhouse_only = ProviderConfig(arm="A6_full", engine="clickhouse", provider="anyone:factory")
+
+    assert select_provider("A6_full", [clickhouse_only], "databricks") is None
+
+
+async def test_a_run_refuses_an_arm_that_has_no_provider_for_its_engine() -> None:
+    """Refusing beats grounding against the other engine and publishing the result."""
+    clickhouse_only = ProviderConfig(
+        arm="A6_full",
+        engine="clickhouse",
+        provider="tests.unit.test_cli:stub_provider_factory",
+    )
+
+    with pytest.raises(CliError, match="no provider configured for databricks"):
+        await _build(["A6_full"], providers=(clickhouse_only,), engine="databricks")
+
+
+def test_the_shipped_catalogue_covers_the_a0_to_a3_ladder_on_both_engines() -> None:
+    """SPEC M3.5: arms A0 to A3 are measured on Databricks, not only on ClickHouse."""
+    configs = load_provider_configs(Path("eval/providers.yaml"))
+
+    for arm in ("A1_stats", "A2_layout", "A3_plan"):
+        for engine in ("clickhouse", "databricks"):
+            assert select_provider(arm, configs, engine) is not None, f"{arm} on {engine}"
