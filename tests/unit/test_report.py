@@ -235,3 +235,22 @@ def test_notes_that_are_not_token_counts_are_ignored() -> None:
     ]
 
     assert "Context the arm did not choose" not in render(records)
+
+
+def test_a_family_s_run_with_no_baseline_says_so_instead_of_failing() -> None:
+    """Somebody scoring one third-party system never built agentdb's ladder.
+
+    `make report` regenerates the committed traces, and the committed traces are
+    exactly such a run — so erroring here breaks the documented command on the
+    project's own data.
+    """
+    records = [
+        record(system="S5_claude_code", task_id="t1"),
+        record(system="S5_claude_code", task_id="t2"),
+    ]
+
+    rendered = render(records, baseline="A0_baseline")
+
+    assert "## Paired comparison" in rendered
+    assert "no records for `A0_baseline`" in rendered
+    assert "S5_claude_code" in rendered

@@ -21,6 +21,10 @@ is called: every number below is a function of the committed traces.
 
 No failures recorded.
 
+## Paired comparison
+
+None: this run contains no records for `A0_baseline`, so the arms above are reported on their own terms. A delta needs both arms to have run the same cells.
+
 ## Configuration
 
 - `S5_claude_code` v1.0 — `sha256:53facc8ad8ad38ead243019a394672861c581253ae58faef73212fadbe49a52d`

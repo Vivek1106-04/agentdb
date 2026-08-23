@@ -145,7 +145,14 @@ def render(records: Sequence[Mapping[str, Any]], *, baseline: str | None = None)
     ]
 
     reference = baseline or summaries[0].system
-    if any(summary.system != reference for summary in summaries):
+    measured = {summary.system for summary in summaries}
+    if reference not in measured:
+        # A Family S run legitimately has no A0: somebody scoring one third-party
+        # system against the suite never built agentdb's ladder. Say the
+        # comparison is absent rather than failing the command that regenerates
+        # the report from the traces already committed.
+        sections += ["", _render_absent_baseline(reference)]
+    elif any(summary.system != reference for summary in summaries):
         sections += ["", _render_comparisons(compare_to_baseline(records, reference))]
 
     sections += ["", _render_footnotes(summaries)]
@@ -153,6 +160,19 @@ def render(records: Sequence[Mapping[str, Any]], *, baseline: str | None = None)
     if undeclared:
         sections += ["", undeclared]
     return "\n".join(sections) + "\n"
+
+
+def _render_absent_baseline(baseline: str) -> str:
+    """Say why there is no paired comparison, rather than omitting the section."""
+    return "\n".join(
+        [
+            "## Paired comparison",
+            "",
+            f"None: this run contains no records for `{baseline}`, so the arms above "
+            "are reported on their own terms. A delta needs both arms to have run "
+            "the same cells.",
+        ]
+    )
 
 
 def _summarize_group(
