@@ -46,6 +46,28 @@ class QueryShape:
     filter_columns: frozenset[str] = frozenset()
     """Columns constrained in ``WHERE`` or ``PREWHERE``, including inside functions."""
 
+    equality_columns: frozenset[str] = frozenset()
+    """Columns constrained by ``=`` or ``IN``.
+
+    Separated from :attr:`range_columns` because the advisors ask different
+    questions of each: an equality predicate on a high-cardinality column is what
+    a bloom filter is for, and a range predicate is what a min/max index and a
+    sort-key prefix are for (SPEC §9.1.B)."""
+
+    range_columns: frozenset[str] = frozenset()
+    """Columns constrained by ``<``, ``<=``, ``>``, ``>=`` or ``BETWEEN``."""
+
+    wrapped_filter_columns: frozenset[str] = frozenset()
+    """Filter columns reached only through a function call.
+
+    ``year(l_shipdate) = 1995`` filters on ``l_shipdate`` and prunes nothing:
+    the engine cannot use a key or a statistic on a column it never sees bare.
+    Both advisors' rewrite rules turn on this (SPEC §9.1.D, §9.2.E)."""
+
+    text_search_columns: frozenset[str] = frozenset()
+    """Columns under ``LIKE``, ``ILIKE`` or a token/substring search — the
+    predicates the text skip-index types exist for."""
+
     group_by_columns: tuple[str, ...] = ()
     order_by_columns: tuple[str, ...] = ()
     joined_tables: tuple[str, ...] = ()
@@ -76,6 +98,12 @@ def analyze(sql: str, engine: str) -> QueryShape:
         tables=_unique(table.name for table in tree.find_all(exp.Table)),
         qualified_tables=_unique(_qualified(table) for table in tree.find_all(exp.Table)),
         filter_columns=frozenset(_filter_columns(tree)),
+        equality_columns=frozenset(_predicate_columns(tree, (exp.EQ, exp.In))),
+        range_columns=frozenset(
+            _predicate_columns(tree, (exp.GT, exp.GTE, exp.LT, exp.LTE, exp.Between))
+        ),
+        wrapped_filter_columns=frozenset(_wrapped_filter_columns(tree)),
+        text_search_columns=frozenset(_predicate_columns(tree, (exp.Like, exp.ILike))),
         group_by_columns=_group_by(tree),
         order_by_columns=_order_by(tree),
         joined_tables=_unique(
@@ -98,6 +126,49 @@ def _filter_columns(tree: exp.Expr) -> set[str]:
     for clause in (*tree.find_all(exp.Where), *tree.find_all(exp.PreWhere)):
         columns.update(column.name for column in clause.find_all(exp.Column))
     return columns
+
+
+def _predicate_columns(tree: exp.Expr, kinds: tuple[type[exp.Expression], ...]) -> set[str]:
+    """Columns constrained by one family of predicate, inside filtering clauses only.
+
+    A join condition is not a filter: ``ON a.id = b.id`` says nothing about which
+    values a scan can skip, and counting it as an equality predicate would send
+    the sort-key rule chasing a key column.
+    """
+    columns: set[str] = set()
+    for clause in (*tree.find_all(exp.Where), *tree.find_all(exp.PreWhere)):
+        for kind in kinds:
+            for predicate in clause.find_all(kind):
+                columns.update(column.name for column in predicate.find_all(exp.Column))
+    return columns
+
+
+def _wrapped_filter_columns(tree: exp.Expr) -> set[str]:
+    """Filter columns that only ever appear inside a function call."""
+    bare: set[str] = set()
+    wrapped: set[str] = set()
+    for clause in (*tree.find_all(exp.Where), *tree.find_all(exp.PreWhere)):
+        for column in clause.find_all(exp.Column):
+            target = wrapped if _under_function(column, clause) else bare
+            target.add(column.name)
+    return wrapped - bare
+
+
+def _under_function(column: exp.Expression, clause: exp.Expression) -> bool:
+    """Whether ``column`` is reached only through a real function call.
+
+    ``sqlglot`` models connectives and comparisons as ``Func`` subclasses too —
+    ``AND`` is one — so a bare ``isinstance`` check would call every filtered
+    column wrapped. Only nodes that are functions and *not* operators count.
+    """
+    node = column.parent
+    while node is not None and node is not clause:
+        if isinstance(node, exp.Func) and not isinstance(
+            node, exp.Binary | exp.Connector | exp.Predicate | exp.Unary
+        ):
+            return True
+        node = node.parent
+    return False
 
 
 def _group_by(tree: exp.Expr) -> tuple[str, ...]:
