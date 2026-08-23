@@ -9,16 +9,19 @@ state: that what gets remembered about a query is parsed from the query.
 
 from __future__ import annotations
 
+from agentdb.adapters import QuerySemanticError
 from agentdb.server import ToolCatalog, build_catalog
 from agentdb.server.base import ServerContext
 from agentdb.server.tools.memory import memory_tools
 from tests.fakes import clickhouse_hits_fixture
 from tests.memory_fakes import FakeConnection
-from tests.server_fakes import clickhouse_catalog, memory_connection, memory_store
+from tests.server_fakes import RESULT, clickhouse_catalog, memory_connection, memory_store
 
 
 def catalog_over(connection: FakeConnection) -> ToolCatalog:
-    return build_catalog(clickhouse_hits_fixture(), store=memory_store(connection))
+    adapter = clickhouse_hits_fixture()
+    adapter.result = RESULT
+    return build_catalog(adapter, store=memory_store(connection))
 
 
 async def test_a_recorded_query_comes_back_with_both_time_axes_open() -> None:
@@ -205,6 +208,92 @@ async def test_history_looks_up_the_parameterized_form_of_the_query() -> None:
 
     assert not response.is_error
     assert response.structured["normalized_sql"] == "SELECT count() FROM hits WHERE EventDate > ?"
+
+
+# --------------------------------------------------------------------------
+# what run_query remembers on its own (SPEC §13.1)
+# --------------------------------------------------------------------------
+
+
+async def test_a_successful_execution_is_remembered_with_its_measured_cost() -> None:
+    connection = memory_connection()
+
+    response = await catalog_over(connection).call(
+        "run_query",
+        {
+            "sql": "SELECT CounterID, count() FROM hits GROUP BY CounterID",
+            "question": "how many hits per counter?",
+            "namespace": "agentdb",
+        },
+    )
+
+    assert not response.is_error
+    _, params = connection.executed("INSERT INTO agentdb_exemplar")[0]
+    assert params is not None
+    assert params[8] == "success"
+    assert params[13] == RESULT.bytes_read
+
+
+async def test_an_execution_with_no_question_runs_and_is_not_remembered() -> None:
+    """An exemplar with no question can never be retrieved by meaning."""
+    connection = memory_connection()
+
+    response = await catalog_over(connection).call(
+        "run_query", {"sql": "SELECT count() FROM hits", "namespace": "agentdb"}
+    )
+
+    assert not response.is_error
+    assert connection.executed("INSERT INTO agentdb_exemplar") == []
+
+
+async def test_an_execution_naming_no_parseable_relation_is_not_remembered() -> None:
+    connection = memory_connection()
+
+    await catalog_over(connection).call(
+        "run_query",
+        {"sql": "SELECT now()", "question": "what time is it?", "namespace": "agentdb"},
+    )
+
+    assert connection.executed("INSERT INTO agentdb_exemplar") == []
+
+
+async def test_a_failed_execution_is_remembered_as_a_negative_exemplar_and_still_reported() -> None:
+    connection = memory_connection()
+    adapter = clickhouse_hits_fixture()
+    adapter.execute_error = QuerySemanticError("Code: 47. UNKNOWN_IDENTIFIER")
+    catalog = build_catalog(adapter, store=memory_store(connection))
+
+    response = await catalog.call(
+        "run_query",
+        {
+            "sql": "SELECT UserId FROM hits",
+            "question": "who visited?",
+            "namespace": "agentdb",
+        },
+    )
+
+    assert response.is_error
+    _, params = connection.executed("INSERT INTO agentdb_exemplar")[0]
+    assert params is not None
+    assert params[8] == "error"
+    assert params[15] == "semantic"
+
+
+async def test_an_execution_is_not_remembered_where_there_is_no_store() -> None:
+    adapter = clickhouse_hits_fixture()
+    adapter.result = RESULT
+    catalog = build_catalog(adapter)
+
+    response = await catalog.call(
+        "run_query",
+        {
+            "sql": "SELECT count() FROM hits",
+            "question": "how many?",
+            "namespace": "agentdb",
+        },
+    )
+
+    assert not response.is_error
 
 
 def test_no_store_means_no_tools() -> None:

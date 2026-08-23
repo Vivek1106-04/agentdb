@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 
+from agentdb.adapters import AdapterError, ResultSet
 from agentdb.core.memory import ExemplarDraft, Outcome, Provenance, normalize_sql
 from agentdb.core.memory.store import ExemplarStore
 from agentdb.core.query_shape import analyze
@@ -335,3 +336,51 @@ def _optional_strings(args: Mapping[str, JsonValue], key: str) -> tuple[str, ...
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ToolError(f"argument {key!r} must be an array of strings")
     return tuple(str(item) for item in value)
+
+
+async def remember_execution(
+    context: ServerContext,
+    *,
+    sql: str,
+    question: str | None,
+    namespace: str | None,
+    result: ResultSet | None = None,
+    error: AdapterError | None = None,
+) -> None:
+    """Record what ``run_query`` just did, when there is enough to record (SPEC §13.1).
+
+    Three things have to be true for an execution to be worth remembering: a
+    store exists, the caller said what question the query answers, and the SQL
+    names a relation this server could parse. An exemplar with no question can
+    never be retrieved by meaning, and one with no relations can never be
+    invalidated by a schema change — either would sit in the store as weight
+    without evidence, so the execution simply is not recorded.
+
+    Failures are recorded too, and deliberately: a failed query with its error
+    class is what arm ``A5_negmemory`` measures the value of.
+    """
+    store = context.store
+    if store is None or not question or not namespace:
+        return
+
+    engine = context.adapter.engine
+    shape = analyze(sql, engine)
+    if not shape.tables:
+        return
+
+    draft = ExemplarDraft(
+        engine=engine,
+        namespace=namespace,
+        question=question,
+        sql=sql,
+        normalized_sql=normalize_sql(sql, engine),
+        relations=shape.tables,
+        columns=_columns(shape.filter_columns, shape.group_by_columns),
+        outcome=Outcome.SUCCESS if error is None else Outcome.ERROR,
+        rows_returned=result.row_count if result is not None else None,
+        bytes_read=result.bytes_read if result is not None else None,
+        duration_ms=result.duration_ms if result is not None else None,
+        error_class=error.error_class.value if error is not None else None,
+        error_text=error.message if error is not None else None,
+    )
+    await asyncio.to_thread(store.record, draft)

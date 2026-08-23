@@ -16,10 +16,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from agentdb.adapters import Limits
+from agentdb.adapters import AdapterError, Limits
 from agentdb.server import serialize
-from agentdb.server.base import ServerContext, ToolDef, optional_int, require_str
+from agentdb.server.base import (
+    ServerContext,
+    ToolDef,
+    optional_int,
+    optional_str,
+    require_str,
+)
 from agentdb.server.schemas import JsonValue, definition_schema, object_schema
+from agentdb.server.tools.memory import remember_execution
 
 
 def execution_tools(context: ServerContext) -> tuple[ToolDef, ...]:
@@ -31,7 +38,20 @@ def _run_query(context: ServerContext) -> ToolDef:
     async def handler(args: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
         sql = require_str(args, "sql")
         limits = _limits(context, args)
-        result = await context.adapter.execute(sql, limits)
+        question = optional_str(args, "question")
+        namespace = optional_str(args, "namespace")
+        try:
+            result = await context.adapter.execute(sql, limits)
+        except AdapterError as error:
+            # Recorded before it is re-raised: a query that failed is exactly the
+            # context arm A5_negmemory exists to measure (SPEC §11.3).
+            await remember_execution(
+                context, sql=sql, question=question, namespace=namespace, error=error
+            )
+            raise
+        await remember_execution(
+            context, sql=sql, question=question, namespace=namespace, result=result
+        )
         return serialize.result_set(result)
 
     return ToolDef(
@@ -43,7 +63,8 @@ def _run_query(context: ServerContext) -> ToolDef:
             "the connection's own privileges, not by inspecting the SQL. Results "
             "report truncated=true when the row ceiling cut them, along with the "
             "rows and bytes the engine actually read — the numbers a plan can "
-            "only estimate."
+            "only estimate. Pass question and namespace to have the outcome "
+            "recorded in the exemplar store, where later questions can retrieve it."
         ),
         input_schema=object_schema(
             {
@@ -67,6 +88,20 @@ def _run_query(context: ServerContext) -> ToolDef:
                     "type": "integer",
                     "minimum": 1,
                     "description": "Lower the timeout for this call. Clamped the same way.",
+                },
+                "question": {
+                    "type": "string",
+                    "description": (
+                        "The question this query answers. Supply it together with "
+                        "namespace to have the execution remembered — including a "
+                        "failure, which becomes a negative exemplar. Without it the "
+                        "query still runs, but nothing is recorded: an exemplar with "
+                        "no question can never be retrieved by meaning."
+                    ),
+                },
+                "namespace": {
+                    "type": "string",
+                    "description": "Database or schema this query reads, for the memory record.",
                 },
             },
             required=["sql"],

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, replace
 
 from agentdb.adapters import (
     Adapter,
+    AdapterError,
     BaseAdapter,
     Capability,
     ColumnDef,
@@ -81,6 +82,8 @@ class FakeAdapter(BaseAdapter):
     profiles: dict[str, ColumnProfile] = field(default_factory=dict)
     plan: RawPlan | None = None
     result: ResultSet | None = None
+    execute_error: AdapterError | None = None
+    """Raised instead of returning ``result``, for the failure paths."""
     workload_entries: tuple[WorkloadEntry, ...] = ()
     rules: DialectRules | None = None
     calls: list[tuple[str, object]] = field(default_factory=list)
@@ -113,6 +116,8 @@ class FakeAdapter(BaseAdapter):
 
     async def execute(self, sql: str, limits: Limits) -> ResultSet:
         self.calls.append(("execute", (sql, limits)))
+        if self.execute_error is not None:
+            raise self.execute_error
         if self.result is None:
             raise AssertionError("FakeAdapter.result was not scripted")
         return self.result
