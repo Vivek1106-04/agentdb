@@ -55,8 +55,21 @@ class FakeClient:
         parameters: Mapping[str, Any],
         row_limit: int | None = None,
         timeout_s: int | None = None,
+        catalog: str | None = None,
+        schema: str | None = None,
     ) -> FakeResult:
-        self.calls.append((sql, parameters, {"row_limit": row_limit, "timeout_s": timeout_s}))
+        self.calls.append(
+            (
+                sql,
+                parameters,
+                {
+                    "row_limit": row_limit,
+                    "timeout_s": timeout_s,
+                    "catalog": catalog,
+                    "schema": schema,
+                },
+            )
+        )
         if self.failure is not None:
             raise self.failure
         for fragment, response in self.responses.items():
@@ -137,7 +150,9 @@ async def test_a_successful_query_carries_the_engines_own_counters() -> None:
         }
     )
 
-    emitted = await _executor(client).run("SELECT count(*) FROM samples.tpch.lineitem")
+    emitted = await _executor(client).run(
+        "SELECT count(*) FROM samples.tpch.lineitem", "samples.tpch"
+    )
 
     assert emitted.succeeded is True
     assert emitted.rows == ((6_001_215,),)
@@ -150,7 +165,9 @@ async def test_a_rejected_query_is_graded_not_raised() -> None:
     client = _client()
     client.failure = RuntimeError("[UNRESOLVED_COLUMN] A column with name `l_ship` cannot be found")
 
-    emitted = await _executor(client).run("SELECT l_ship FROM samples.tpch.lineitem")
+    emitted = await _executor(client).run(
+        "SELECT l_ship FROM samples.tpch.lineitem", "samples.tpch"
+    )
 
     assert emitted.succeeded is False
     assert emitted.error_class == "semantic"
@@ -163,13 +180,13 @@ async def test_a_failure_that_never_reached_the_warehouse_is_run_fatal() -> None
     # no error class means no SQL layer answered: grading it would record a
     # dead socket as a wrong answer
     with pytest.raises(RuntimeError, match="connection reset"):
-        await _executor(client).run("SELECT 1")
+        await _executor(client).run("SELECT 1", "samples.tpch")
 
 
 async def test_every_statement_carries_its_attribution_prefix() -> None:
     client = _client()
 
-    await _executor(client, context_id="bench").run("SELECT 1")
+    await _executor(client, context_id="bench").run("SELECT 1", "samples.tpch")
 
     assert client.statements()[0].startswith("/* agentdb:bench:turn01 */")
 
@@ -178,10 +195,15 @@ async def test_limits_travel_with_every_statement() -> None:
     client = _client()
 
     await _executor(client, limits=DatabricksLimits(timeout_s=17, max_result_rows=25)).run(
-        "SELECT 1"
+        "SELECT 1", "samples.tpch"
     )
 
-    assert client.calls[0][2] == {"row_limit": 25, "timeout_s": 17}
+    assert client.calls[0][2] == {
+        "row_limit": 25,
+        "timeout_s": 17,
+        "catalog": "samples",
+        "schema": "tpch",
+    }
 
 
 def test_the_executor_declares_the_engine_the_runner_filters_tasks_by() -> None:
@@ -432,7 +454,7 @@ async def test_a_traced_query_records_the_pruning_the_warehouse_measured() -> No
         }
     )
 
-    emitted = await executor.run("SELECT 1")
+    emitted = await executor.run("SELECT 1", "samples.tpch")
 
     assert emitted.files_read == 3
     assert emitted.files_pruned == 37
@@ -447,7 +469,7 @@ async def test_pruning_is_not_collected_unless_the_run_asked_for_it() -> None:
         "metrics": {"read_files_count": 3, "pruned_files_count": 37},
     }
 
-    emitted = await DatabricksExecutor(client=client).run("SELECT 1")
+    emitted = await DatabricksExecutor(client=client).run("SELECT 1", "samples.tpch")
 
     assert emitted.files_read is None
     assert client.history_lookups == []  # one API call per query is not free
@@ -467,7 +489,7 @@ async def test_a_cache_hit_records_no_pruning_rather_than_a_perfect_one() -> Non
         }
     )
 
-    emitted = await executor.run("SELECT 1")
+    emitted = await executor.run("SELECT 1", "samples.tpch")
 
     assert emitted.files_read is None
     assert emitted.files_pruned is None
@@ -483,7 +505,7 @@ async def test_a_metadata_only_answer_records_no_pruning_either() -> None:
         }
     )
 
-    emitted = await executor.run("SELECT count(*) FROM samples.tpch.region")
+    emitted = await executor.run("SELECT count(*) FROM samples.tpch.region", "samples.tpch")
 
     assert emitted.files_read is None
 
@@ -491,7 +513,7 @@ async def test_a_metadata_only_answer_records_no_pruning_either() -> None:
 async def test_a_statement_the_history_never_recorded_leaves_the_trace_silent() -> None:
     executor, _ = _executor_with_history(None)
 
-    emitted = await executor.run("SELECT 1")
+    emitted = await executor.run("SELECT 1", "samples.tpch")
 
     assert emitted.files_read is None
     assert emitted.files_pruned is None
@@ -500,7 +522,7 @@ async def test_a_statement_the_history_never_recorded_leaves_the_trace_silent() 
 async def test_an_entry_without_a_metrics_section_leaves_the_trace_silent() -> None:
     executor, _ = _executor_with_history({"query_id": "01ef-abc", "is_final": True})
 
-    assert (await executor.run("SELECT 1")).files_read is None
+    assert (await executor.run("SELECT 1", "samples.tpch")).files_read is None
 
 
 async def test_an_unreadable_file_count_is_unknown_rather_than_zero() -> None:
@@ -511,7 +533,7 @@ async def test_an_unreadable_file_count_is_unknown_rather_than_zero() -> None:
         }
     )
 
-    emitted = await executor.run("SELECT 1")
+    emitted = await executor.run("SELECT 1", "samples.tpch")
 
     assert emitted.files_read is None
     assert emitted.files_pruned == 7
@@ -521,7 +543,7 @@ async def test_a_statement_with_no_id_cannot_be_attributed_so_it_is_not_looked_u
     client = _client(**{"SELECT 1": FakeResult(statement_id=None)})
     executor = DatabricksExecutor(client=client, collect_pruning=True)
 
-    emitted = await executor.run("SELECT 1")
+    emitted = await executor.run("SELECT 1", "samples.tpch")
 
     assert emitted.files_read is None
     assert client.history_lookups == []
@@ -659,3 +681,22 @@ async def test_the_sdk_type_enum_is_read_by_value_not_by_str() -> None:
     # str(ColumnInfoTypeName.LONG) is 'ColumnInfoTypeName.LONG'. Matching on that
     # silently coerces nothing, which is how this fix first shipped doing nothing.
     assert await _cells([_TypeName.LONG], ["42"]) == (42,)
+
+
+async def test_the_task_namespace_decides_the_catalog_and_schema_of_an_execution() -> None:
+    """A two-part name resolves against the schema the task names, not the client's."""
+    client = _client()
+
+    await _executor(client).run("SELECT count(*) FROM lineitem", "main.warehouse")
+
+    assert client.calls[0][2]["catalog"] == "main"
+    assert client.calls[0][2]["schema"] == "warehouse"
+
+
+async def test_a_one_part_namespace_keeps_the_configured_catalog() -> None:
+    client = _client()
+
+    await _executor(client).run("SELECT count(*) FROM lineitem", "tpch")
+
+    assert client.calls[0][2]["catalog"] == "samples"
+    assert client.calls[0][2]["schema"] == "tpch"

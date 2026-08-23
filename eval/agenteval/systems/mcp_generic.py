@@ -206,7 +206,7 @@ class McpSystem:
         if final_sql is None:
             notes.append(NO_SQL_NOTE)
         else:
-            queries = (await self.executor.run(final_sql),)
+            queries = (await self.executor.run(final_sql, task.namespace),)
 
         return self._attempt(
             task,

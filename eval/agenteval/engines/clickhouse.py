@@ -89,11 +89,18 @@ class ClickHouseExecutor:
         ]
         return "\n\n".join(statements)
 
-    async def run(self, sql: str) -> EmittedQuery:
-        """Execute ``sql``, returning the outcome rather than raising on rejection."""
+    async def run(self, sql: str, namespace: str) -> EmittedQuery:
+        """Execute ``sql`` against ``namespace``, reporting rejection rather than raising.
+
+        The database is set per query rather than on the connection, so one run
+        can cross ``clickbench_nl`` (``agentdb``) and ``tpch_nl`` (``tpch``)
+        without reconnecting — and so an unqualified gold query lands in the
+        database its task declares rather than in whichever one the operator
+        exported last.
+        """
         started = perf_counter()
         try:
-            result = await self._query(sql)
+            result = await self._query(sql, namespace)
         except Exception as exc:
             error_class = clickhouse_error_class(str(exc))
             if error_class is None:
@@ -122,15 +129,31 @@ class ClickHouseExecutor:
         """Close the driver's connection pool."""
         await self.client.close()
 
-    async def _query(self, sql: str) -> QueryResult:
-        return await self.client.query(sql, settings=self._settings())
+    async def _query(self, sql: str, namespace: str | None = None) -> QueryResult:
+        return await self.client.query(sql, settings=self._settings(namespace))
 
-    def _settings(self) -> dict[str, Any]:
-        return {
+    def _settings(self, namespace: str | None = None) -> dict[str, Any]:
+        settings: dict[str, Any] = {
             "log_comment": f"{LOG_COMMENT_PREFIX}:{self.context_id}:{self.turn_id()}",
             "max_execution_time": self.limits.max_execution_time,
             "max_result_rows": self.limits.max_result_rows,
         }
+        if namespace is not None:
+            # A URL parameter of the HTTP interface, not a server setting: it
+            # scopes unqualified names in this statement alone.
+            settings["database"] = _identifier(namespace)
+        return settings
+
+
+def _identifier(name: str) -> str:
+    """Validate a database name bound for the wire, unquoted.
+
+    The ``database`` parameter takes a bare name; backticks would become part of
+    it. Validation still runs, for the reason :func:`_quote_identifier` gives.
+    """
+    if not _IDENTIFIER.match(name):
+        raise SchemaError(f"{name!r} is not a valid ClickHouse identifier")
+    return name
 
 
 def _quote_identifier(name: str) -> str:

@@ -30,7 +30,7 @@ class GoldError(RuntimeError):
 
 async def resolve_gold(executor: QueryExecutor, task: Task) -> GoldResult:
     """Run ``task.gold_sql`` and return its result, verifying any committed hash."""
-    emitted = await executor.run(task.gold_sql)
+    emitted = await executor.run(task.gold_sql, task.namespace)
     if not emitted.succeeded:
         raise GoldError(
             f"gold_sql for task {task.id!r} does not run on {executor.engine} "

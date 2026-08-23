@@ -271,14 +271,20 @@ class StatementExecutionClient:
         parameters: Mapping[str, Any],
         row_limit: int | None = None,
         timeout_s: int | None = None,
+        catalog: str | None = None,
+        schema: str | None = None,
     ) -> StatementResponse:
-        """Run one statement, passing values as markers rather than interpolating them."""
+        """Run one statement, passing values as markers rather than interpolating them.
+
+        ``catalog`` and ``schema`` override the client's own for this statement,
+        so a run can cross schemas without a second client.
+        """
         low, high = DBX_WAIT_SECONDS
         response = self.api.execute_statement(
             statement=sql,
             warehouse_id=self.warehouse_id,
-            catalog=self.catalog,
-            schema=self.schema,
+            catalog=catalog or self.catalog,
+            schema=schema or self.schema,
             parameters=[
                 self.parameter(name=name, value=_text(value)) for name, value in parameters.items()
             ],

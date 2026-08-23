@@ -37,8 +37,13 @@ class QueryExecutor(Protocol):
         """The ``CREATE TABLE`` DDL for ``namespace``, as the A0 arm shows it."""
         ...
 
-    async def run(self, sql: str) -> EmittedQuery:
-        """Execute ``sql`` and report the outcome.
+    async def run(self, sql: str, namespace: str) -> EmittedQuery:
+        """Execute ``sql`` against ``namespace`` and report the outcome.
+
+        The namespace is the task's, not the connection's. A benchmark whose
+        executions landed wherever the connection happened to point would score
+        an entire suite as failed the moment somebody ran it with the other
+        suite's database configured — and would publish that as a model result.
 
         Never raises for a *query* failure: an engine rejecting a query is a
         measurement, not an exception. Connection-level faults may still raise.

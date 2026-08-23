@@ -67,6 +67,8 @@ class FakeExecutor:
     outcomes: list[EmittedQuery] = field(default_factory=list)
     executed: list[str] = field(default_factory=list)
     namespaces: list[str] = field(default_factory=list)
+    executed_namespaces: list[str] = field(default_factory=list)
+    """Where each execution was sent — the task's namespace, not the connection's."""
     closed: bool = False
     """Set by :meth:`aclose`, so a test can assert the run released its engine."""
 
@@ -74,8 +76,9 @@ class FakeExecutor:
         self.namespaces.append(namespace)
         return self.schema
 
-    async def run(self, sql: str) -> EmittedQuery:
+    async def run(self, sql: str, namespace: str = "agentdb") -> EmittedQuery:
         self.executed.append(sql)
+        self.executed_namespaces.append(namespace)
         outcome = self.outcomes.pop(0) if self.outcomes else OK
         return replace(outcome, sql=sql)
 

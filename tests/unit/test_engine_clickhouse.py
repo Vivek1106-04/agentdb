@@ -106,7 +106,7 @@ async def test_a_successful_query_reports_rows_and_the_servers_own_counters() ->
     )
 
     # Act
-    emitted = await executor.run("SELECT count() FROM hits")
+    emitted = await executor.run("SELECT count() FROM hits", "agentdb")
 
     # Assert
     assert emitted.succeeded is True
@@ -121,7 +121,7 @@ async def test_a_successful_query_reports_rows_and_the_servers_own_counters() ->
 async def test_a_rejected_query_is_recorded_not_raised() -> None:
     executor, _ = _executor(RuntimeError("Code: 62. DB::Exception: Syntax error"))
 
-    emitted = await executor.run("SELEC 1")
+    emitted = await executor.run("SELEC 1", "agentdb")
 
     assert emitted.succeeded is False
     assert emitted.error_class == "syntax"
@@ -134,13 +134,13 @@ async def test_a_connection_failure_reaches_the_runner() -> None:
     executor, _ = _executor(OSError("Connection refused"))
 
     with pytest.raises(OSError, match="Connection refused"):
-        await executor.run("SELECT 1")
+        await executor.run("SELECT 1", "agentdb")
 
 
 async def test_every_query_is_tagged_for_query_log_attribution() -> None:
     executor, client = _executor(FakeResult())
 
-    await executor.run("SELECT 1")
+    await executor.run("SELECT 1", "agentdb")
 
     assert client.settings[0]["log_comment"] == f"{LOG_COMMENT_PREFIX}:agenteval:turn0001"
 
@@ -151,7 +151,7 @@ async def test_per_query_ceilings_are_sent() -> None:
         client=client, limits=ClickHouseLimits(max_execution_time=5, max_result_rows=100)
     )
 
-    await executor.run("SELECT 1")
+    await executor.run("SELECT 1", "agentdb")
 
     assert client.settings[0]["max_execution_time"] == 5
     assert client.settings[0]["max_result_rows"] == 100
@@ -164,7 +164,7 @@ async def test_a_missing_or_junk_counter_is_reported_as_unknown(
     # Arrange — an absent counter must read as unknown, never as zero
     executor, _ = _executor(FakeResult(summary=summary))
 
-    assert (await executor.run("SELECT 1")).rows_read is None
+    assert (await executor.run("SELECT 1", "agentdb")).rows_read is None
 
 
 # --------------------------------------------------------------------------
@@ -280,3 +280,19 @@ async def test_closing_the_executor_closes_the_driver_pool() -> None:
     await executor.aclose()
 
     assert client.closed
+
+
+async def test_every_execution_lands_in_the_namespace_the_task_declared() -> None:
+    """One run crosses clickbench_nl (agentdb) and tpch_nl (tpch) without reconnecting."""
+    executor, client = _executor(FakeResult())
+
+    await executor.run("SELECT count() FROM lineitem", "tpch")
+
+    assert client.settings[-1]["database"] == "tpch"
+
+
+async def test_a_namespace_that_is_not_an_identifier_never_reaches_the_server() -> None:
+    executor, _ = _executor(FakeResult())
+
+    with pytest.raises(SchemaError, match="not a valid ClickHouse identifier"):
+        await executor.run("SELECT 1", "tpch; DROP")

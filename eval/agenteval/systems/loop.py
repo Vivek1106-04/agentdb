@@ -99,7 +99,7 @@ async def answer_with_model(
                 turns.append(Turn(role="user", content=feedback))
                 continue
 
-        emitted = await executor.run(sql)
+        emitted = await executor.run(sql, task.namespace)
         queries.append(emitted)
         executed += 1
         if emitted.succeeded or executed > max_retries:

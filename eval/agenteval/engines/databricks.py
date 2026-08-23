@@ -79,6 +79,8 @@ class DatabricksClient(Protocol):
         parameters: Mapping[str, Any],
         row_limit: int | None = None,
         timeout_s: int | None = None,
+        catalog: str | None = None,
+        schema: str | None = None,
     ) -> StatementResult: ...
 
     async def query_info(self, statement_id: str) -> Mapping[str, Any] | None:
@@ -130,11 +132,16 @@ class DatabricksExecutor:
             statements.append(str(result.rows[0][0]) if result.rows else "")
         return "\n\n".join(statement for statement in statements if statement)
 
-    async def run(self, sql: str) -> EmittedQuery:
-        """Execute ``sql``, returning the outcome rather than raising on rejection."""
+    async def run(self, sql: str, namespace: str) -> EmittedQuery:
+        """Execute ``sql`` against ``namespace``, reporting rejection rather than raising.
+
+        The catalog and schema come from the task, not from however the client
+        was constructed, so a two-part name in a model's answer resolves against
+        the schema the task names — the one the grounding described.
+        """
         started = perf_counter()
         try:
-            result = await self._query(sql, {})
+            result = await self._query(sql, {}, namespace=namespace)
         except Exception as exc:
             error_class = databricks_error_class(str(exc))
             if error_class is None:
@@ -204,13 +211,18 @@ class DatabricksExecutor:
             return self.catalog, namespace
         return catalog, schema
 
-    async def _query(self, sql: str, parameters: Mapping[str, Any]) -> StatementResult:
+    async def _query(
+        self, sql: str, parameters: Mapping[str, Any], namespace: str | None = None
+    ) -> StatementResult:
         tagged = f"/* {TAG_PREFIX}:{self.context_id}:{self.turn_id()} */\n{sql}"
+        catalog, schema = self._split(namespace) if namespace is not None else (None, None)
         return await self.client.statement(
             tagged,
             parameters=parameters,
             row_limit=self.limits.max_result_rows,
             timeout_s=self.limits.timeout_s,
+            catalog=catalog,
+            schema=schema,
         )
 
 
