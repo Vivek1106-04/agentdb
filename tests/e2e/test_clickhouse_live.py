@@ -36,8 +36,11 @@ from agentdb.adapters import (
 from agentdb.adapters.base import AdapterError, QueryPermissionError
 from agentdb.adapters.clickhouse import ClickHouseAdapter
 from agentdb.adapters.clickhouse_client import ClickHouseTarget, build_client
+from agentdb.bench import build_memory_provider, build_provider
+from agentdb.bench.advised_provider import build_advised_provider
 from agentdb.config import Config
 from agentdb.core import ContextBuilder, GroundingLevel, PlanExplainer, WarningCode
+from agentdb.core.advisor.render import HEADER
 from agentdb.core.memory import normalize_sql, snapshot
 from agentdb.core.memory.postgres import connect
 from agentdb.core.memory.store import ExemplarStore
@@ -351,3 +354,50 @@ async def test_a_failed_execution_becomes_a_negative_exemplar(
 
     assert failed.is_error
     assert _first_exemplar(negatives.structured, "negative")["error_class"] == "semantic"
+
+
+# --------------------------------------------------------------------------
+# the Family A ladder, assembled against live infrastructure
+# --------------------------------------------------------------------------
+
+
+async def test_the_full_ladder_builds_a_payload_against_the_real_table(
+    adapter: ClickHouseAdapter, store: ExemplarStore
+) -> None:
+    """A0 through A6, on 100M real rows: the arms the benchmark will run.
+
+    This is the pipeline check the published numbers depend on. Every rung has to
+    add its own kind of fact and nothing else — if A6's payload does not contain
+    A2's sort key, the ladder is not cumulative and the deltas between arms are
+    measuring something other than what the report will say they measure.
+    """
+    a2 = build_provider(adapter=adapter, plan_review=True)
+    a5 = build_memory_provider(base=a2, store=store, include_failures=True)
+    a6 = build_advised_provider(base=a5, workload="clickbench")
+
+    question = "which counters saw the most hits in July 2013?"
+    layout_payload = await a2.context(namespace="agentdb", question=question)
+    advised_payload = await a6.context(namespace="agentdb", question=question)
+
+    assert "sort key (ORDER BY): CounterID" in layout_payload
+    assert layout_payload in advised_payload, "the ladder is cumulative"
+    assert HEADER in advised_payload
+    assert "ALTER TABLE" not in advised_payload[advised_payload.index(HEADER) :]
+
+
+async def test_the_advisor_reads_the_real_layout_and_names_a_real_column(
+    adapter: ClickHouseAdapter, store: ExemplarStore
+) -> None:
+    """No fixtures: the cardinalities are sampled from the live table."""
+    a6 = build_advised_provider(
+        base=build_memory_provider(
+            base=build_provider(adapter=adapter), store=store, include_failures=True
+        ),
+        workload="clickbench",
+    )
+
+    payload = await a6.context(namespace="agentdb", question="how many hits mention google?")
+
+    advice = payload[payload.index(HEADER) :]
+    assert "URL" in advice, "the reference workload filters on URL and the sort key does not"
+    assert "100%" not in advice, "an upper bound is never quoted as a certainty"

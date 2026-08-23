@@ -53,6 +53,10 @@ right default for a wide fact table where the index competes for page cache."""
 
 TEXT_TYPES = ("String", "FixedString", "LowCardinality(String)", "Nullable(String)")
 
+ROWS_PER_GRANULE = 8192
+"""ClickHouse's default ``index_granularity``. The unit the sparse index works in,
+and therefore the floor on what any pruning estimate can honestly claim."""
+
 
 @dataclass(frozen=True, slots=True)
 class ClickHouseAdvisor:
@@ -115,7 +119,7 @@ class ClickHouseAdvisor:
             Recommendation(
                 kind=Kind.ORDER_BY,
                 relation=ref,
-                rationale=self._sort_key_rationale(existing, candidate, demand, profiles),
+                rationale=self._sort_key_rationale(existing, candidate, demand, profiles, layout),
                 evidence=evidence,
                 expected_effect=EffectEstimate(
                     metric="granules_read",
@@ -173,17 +177,25 @@ class ClickHouseAdvisor:
         candidate: Sequence[str],
         demand: Demand,
         profiles: Mapping[str, ColumnProfile],
+        layout: PhysicalLayout,
     ) -> str:
         lead = candidate[0]
         distinct = profiles[lead].approx_distinct
         current = ", ".join(existing) if existing else "no sort key"
         share = demand.of(lead).share
+        note = (
+            " Note that a lead column this distinct leaves little for the columns after "
+            "it to prune, so weigh this against a skip index on the same column, which "
+            "costs a rebuild of nothing."
+            if _is_high_cardinality(lead, profiles, layout)
+            else " ClickHouse's primary index is sparse, so a leading column with long runs "
+            "of equal values excludes whole granule ranges."
+        )
         return (
             f"{share:.0%} of the queries considered filter on {lead} "
-            f"(~{distinct:,} distinct values), and the table is sorted by {current}. "
-            "ClickHouse's primary index is sparse, so a leading column with long runs "
-            "of equal values excludes whole granule ranges; a key that never leads with "
-            "a filtered column prunes nothing no matter how selective the filter is."
+            f"(~{distinct:,} distinct values), and the table is sorted by {current}, which "
+            f"cannot prune for them: a key that never leads with a filtered column prunes "
+            f"nothing no matter how selective the filter is.{note}"
         )
 
     def _sort_key_risks(
@@ -223,8 +235,7 @@ class ClickHouseAdvisor:
         distinct = profiles[candidate[0]].approx_distinct
         if not distinct or not layout.approx_rows:
             return None
-        rows_per_granule = 8192
-        granules = max(layout.approx_rows / rows_per_granule, 1.0)
+        granules = max(layout.approx_rows / ROWS_PER_GRANULE, 1.0)
         return min(1.0, max(1.0 / distinct, 1.0 / granules))
 
     # -- B. skip indexes ---------------------------------------------------
@@ -395,6 +406,22 @@ def _index_recommendation(
             "a skip index that does not prune still costs write throughput and disk",
         ),
     )
+
+
+def _is_high_cardinality(
+    column: str, profiles: Mapping[str, ColumnProfile], layout: PhysicalLayout
+) -> bool:
+    """Whether this column has too many distinct values to lead a sparse index well.
+
+    The threshold is one distinct value per granule: past that, a leading column
+    changes on every mark and the columns after it in the key never get a chance
+    to prune anything.
+    """
+    distinct = profiles[column].approx_distinct
+    rows = layout.approx_rows
+    if not distinct or not rows:
+        return False
+    return distinct > max(rows / ROWS_PER_GRANULE, 1.0)
 
 
 def _sort_key_migration(ref: RelationRef, layout: PhysicalLayout, candidate: Sequence[str]) -> str:

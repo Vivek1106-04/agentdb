@@ -160,6 +160,29 @@ def test_the_estimate_names_its_method_and_never_claims_measurement() -> None:
     assert "upper bound" in key.expected_effect.method
 
 
+def test_a_high_cardinality_lead_is_not_sold_with_the_long_runs_argument() -> None:
+    """The rule ranks by frequency, so the lead can be distinct — say that, do not contradict it."""
+    found = advise(
+        "SELECT count() FROM hits WHERE URL LIKE '%google%'",
+        "SELECT count() FROM hits WHERE URL <> ''",
+        "SELECT count() FROM hits WHERE SearchEngineID = 2",
+        profiles=[profile("URL", 20_000_000, "String"), profile("SearchEngineID", 42)],
+    )
+
+    key = of_kind(found, Kind.ORDER_BY)[0]
+    assert "long runs" not in key.rationale
+    assert "weigh this against a skip index" in key.rationale
+
+
+def test_a_low_cardinality_lead_still_gets_the_long_runs_explanation() -> None:
+    found = advise(
+        "SELECT count() FROM hits WHERE SearchEngineID = 2",
+        profiles=[profile("SearchEngineID", 42)],
+    )
+
+    assert "long runs" in of_kind(found, Kind.ORDER_BY)[0].rationale
+
+
 # --------------------------------------------------------------------------
 # B. skip indexes
 # --------------------------------------------------------------------------

@@ -7,6 +7,11 @@ benchmark scores agentdb the same way it scores anyone else (SPEC §4.1.6).
 
 from __future__ import annotations
 
+from agentdb.bench.advised_provider import (
+    AdvisedContextProvider,
+    build_advised_provider,
+    clickhouse_advised_provider,
+)
 from agentdb.bench.memory_provider import (
     MemoryContextProvider,
     build_memory_provider,
@@ -19,10 +24,13 @@ from agentdb.bench.provider import (
 )
 
 __all__ = [
+    "AdvisedContextProvider",
     "GroundedContextProvider",
     "MemoryContextProvider",
+    "build_advised_provider",
     "build_memory_provider",
     "build_provider",
+    "clickhouse_advised_provider",
     "clickhouse_memory_provider",
     "clickhouse_provider",
 ]

@@ -49,3 +49,19 @@
   options:
     name: agentdb/A5_negmemory
     include_failures: true
+
+# A6 is A5 plus the advisor's findings, rendered as context (SPEC §11.3, §9).
+#
+# Its demand signal is a committed reference workload of third-party query
+# shapes — ClickBench's published queries — rather than the live query log. On a
+# benchmark instance that log holds this project's own gold executions, so
+# mining it would hand the advisor the answers and call the result an ablation.
+# The honest limitation, stated in the module and again here: A6 measures the
+# advisor against a representative workload, not the operator's real one.
+
+- arm: A6_full
+  provider: agentdb.bench.advised_provider:clickhouse_advised_provider
+  plan_review: true
+  options:
+    name: agentdb/A6_full
+    workload: clickbench

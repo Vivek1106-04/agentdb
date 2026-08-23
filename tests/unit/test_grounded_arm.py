@@ -237,10 +237,18 @@ def test_the_shipped_catalogue_names_the_family_a_arms(tmp_path: Path) -> None:
         "A3_plan",
         "A4_memory",
         "A5_negmemory",
+        "A6_full",
     ]
     assert all(config.provider.startswith("agentdb.bench.") for config in configs)
     assert configs[0].options["level"] == "stats"
-    assert [config.plan_review for config in configs] == [False, False, True, True, True]
+    assert [config.plan_review for config in configs] == [
+        False,
+        False,
+        True,
+        True,
+        True,
+        True,
+    ]
 
 
 def test_a_config_needs_an_arm_and_a_provider() -> None:

@@ -215,6 +215,7 @@ def test_the_shipped_provider_catalogue_is_keyed_by_arm() -> None:
         "A3_plan",
         "A4_memory",
         "A5_negmemory",
+        "A6_full",
     ]
 
 
