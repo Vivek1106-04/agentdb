@@ -23,6 +23,9 @@ from agentdb.server import ToolCatalog
 from agentdb.server.schemas import SCHEMA_DIALECT, JsonValue
 from tests.server_fakes import clickhouse_catalog, databricks_catalog
 
+ADVICE_SQL_CH = "SELECT count() FROM hits WHERE UserID = 42 AND SearchEngineID = 2"
+ADVICE_SQL_DBX = "SELECT count(*) FROM samples.tpch.lineitem WHERE l_shipdate > '1995-01-01'"
+
 CLICKHOUSE_ARGS: dict[str, Mapping[str, JsonValue]] = {
     "list_namespaces": {},
     "list_relations": {"namespace": "agentdb"},
@@ -43,6 +46,13 @@ CLICKHOUSE_ARGS: dict[str, Mapping[str, JsonValue]] = {
         "namespace": "agentdb",
     },
     "run_query": {"sql": "SELECT CounterID, count() AS hits FROM hits GROUP BY CounterID"},
+    "advise_sort_key": {"relation": "agentdb.hits", "sql": ADVICE_SQL_CH},
+    "advise_indexes": {"relation": "agentdb.hits", "sql": ADVICE_SQL_CH},
+    "advise_projection": {"relation": "agentdb.hits", "sql": ADVICE_SQL_CH},
+    "advise_clustering": {"relation": "agentdb.hits", "sql": ADVICE_SQL_CH},
+    "advise_skipping_stats": {"relation": "agentdb.hits", "sql": ADVICE_SQL_CH},
+    "advise_compaction": {"relation": "agentdb.hits", "sql": ADVICE_SQL_CH},
+    "suggest_rewrite": {"relation": "agentdb.hits", "sql": ADVICE_SQL_CH},
     "retrieve_exemplars": {
         "question": "how many hits per counter?",
         "namespace": "agentdb",
@@ -82,6 +92,13 @@ DATABRICKS_ARGS: dict[str, Mapping[str, JsonValue]] = {
         "namespace": "samples.tpch",
     },
     "run_query": {"sql": "SELECT count(*) FROM samples.tpch.lineitem"},
+    "advise_sort_key": {"relation": "samples.tpch.lineitem", "sql": ADVICE_SQL_DBX},
+    "advise_indexes": {"relation": "samples.tpch.lineitem", "sql": ADVICE_SQL_DBX},
+    "advise_projection": {"relation": "samples.tpch.lineitem", "sql": ADVICE_SQL_DBX},
+    "advise_clustering": {"relation": "samples.tpch.lineitem", "sql": ADVICE_SQL_DBX},
+    "advise_skipping_stats": {"relation": "samples.tpch.lineitem", "sql": ADVICE_SQL_DBX},
+    "advise_compaction": {"relation": "samples.tpch.lineitem", "sql": ADVICE_SQL_DBX},
+    "suggest_rewrite": {"relation": "samples.tpch.lineitem", "sql": ADVICE_SQL_DBX},
     "retrieve_exemplars": {
         "question": "how many line items shipped in 1995?",
         "namespace": "samples.tpch",
@@ -133,11 +150,34 @@ def test_input_schema_is_an_object_root_with_documented_properties(engine: str, 
         assert definition.get("description"), f"{name}.{argument} has no description"
 
 
+ENGINE_SPECIFIC: dict[str, str] = {
+    "advise_sort_key": "clickhouse",
+    "advise_indexes": "clickhouse",
+    "advise_projection": "clickhouse",
+    "advise_clustering": "databricks",
+    "advise_skipping_stats": "databricks",
+    "advise_compaction": "databricks",
+}
+"""Advice that only one engine has a concept of.
+
+Both engines still *serve* both sets — a client should not have to ask which
+engine it is talking to before it knows which tools it has — so the one that does
+not apply refuses by name. That refusal is part of the contract and is checked
+here rather than skipped.
+"""
+
+
 @pytest.mark.parametrize(("engine", "name"), TOOL_IDS)
 async def test_response_conforms_to_the_declared_output_schema(engine: str, name: str) -> None:
     catalog, arguments = CATALOGS[engine]
 
     response = await catalog.call(name, arguments[name])
+
+    if ENGINE_SPECIFIC.get(name, engine) != engine:
+        assert response.is_error
+        assert ENGINE_SPECIFIC[name] in str(response.structured["error"]).lower()
+        assert response.structured["suggestion"], "a refusal names what to call instead"
+        return
 
     assert not response.is_error, response.structured
     Draft202012Validator(catalog.get(name).output_schema).validate(response.structured)

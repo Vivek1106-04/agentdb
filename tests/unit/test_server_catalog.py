@@ -32,6 +32,13 @@ def test_the_catalog_advertises_the_spec_13_1_groups_in_order() -> None:
         "dialect_rules",
         "explain_plan",
         "explain_diff",
+        "advise_sort_key",
+        "advise_indexes",
+        "advise_projection",
+        "advise_clustering",
+        "advise_skipping_stats",
+        "advise_compaction",
+        "suggest_rewrite",
         "run_query",
         "retrieve_exemplars",
         "record_outcome",
@@ -51,9 +58,9 @@ def test_an_unknown_tool_names_the_tools_that_do_exist() -> None:
     catalog, _ = clickhouse_catalog()
 
     with pytest.raises(ToolError) as caught:
-        catalog.get("advise_sort_key")
+        catalog.get("advise_everything")
 
-    assert "advise_sort_key" in caught.value.message
+    assert "advise_everything" in caught.value.message
     assert "list_relations" in (caught.value.suggestion or "")
 
 

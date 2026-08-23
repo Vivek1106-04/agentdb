@@ -398,6 +398,126 @@ DEFS: Final[dict[str, dict[str, JsonValue]]] = {
         "required": ["detail", "layout", "profiles", "profiled_columns_available"],
         "additionalProperties": False,
     },
+    "effect_estimate": {
+        "type": "object",
+        "description": "What a recommendation is expected to change, and how that was derived.",
+        "properties": {
+            "metric": {
+                "enum": ["granules_read", "files_read", "bytes_read"],
+                "description": (
+                    "Never latency: this project does not measure wall clock on a "
+                    "shared warehouse and will not imply that it did."
+                ),
+            },
+            "before": _nullable("number", "Current value, where the engine reported one."),
+            "after": _nullable("number", "Projected value; null when it cannot be derived."),
+            "reduction": _nullable("number", "Fraction removed, when both ends are known."),
+            "method": {
+                "type": "string",
+                "description": "The derivation in one sentence. An estimate with no stated "
+                "method is a claim.",
+            },
+        },
+        "required": ["metric", "before", "after", "reduction", "method"],
+        "additionalProperties": False,
+    },
+    "evidence": {
+        "type": "object",
+        "description": "The facts a recommendation was derived from, carried with it.",
+        "properties": {
+            "source": {"type": "string", "description": "plan, profile, workload, shadow."},
+            "pruning_ratio": _nullable("number", "Units selected over units considered."),
+            "pruning_unit": {
+                "type": ["string", "null"],
+                "enum": ["granule", "file", "partition", None],
+                "description": "Always beside the ratio: a granule ratio is not a file ratio.",
+            },
+            "relation_rows": _nullable("integer", ""),
+            "bytes_read": _nullable("integer", ""),
+            "distinct_counts": _array(
+                {
+                    "type": "array",
+                    "prefixItems": [{"type": "string"}, {"type": "integer"}],
+                    "items": False,
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+                "Column and its approximate distinct count, for every column weighed.",
+            ),
+            "workload_queries": _nullable(
+                "integer",
+                "Queries the demand signal covers; null when the advice came from one query.",
+            ),
+        },
+        "required": [
+            "source",
+            "pruning_ratio",
+            "pruning_unit",
+            "relation_rows",
+            "bytes_read",
+            "distinct_counts",
+            "workload_queries",
+        ],
+        "additionalProperties": False,
+    },
+    "recommendation": {
+        "type": "object",
+        "description": (
+            "One physical-design or rewrite proposal (SPEC §9). DDL is text: agentdb "
+            "never executes it without an elicited confirmation."
+        ),
+        "properties": {
+            "kind": {
+                "enum": [
+                    "order_by",
+                    "skip_index",
+                    "projection",
+                    "cluster_by",
+                    "stats_columns",
+                    "compaction",
+                    "broadcast_hint",
+                    "rewrite",
+                    "partition",
+                    "type_change",
+                    "materialized_view",
+                ]
+            },
+            "relation": _ref("relation_ref"),
+            "rationale": {
+                "type": "string",
+                "description": "Cites the specific evidence, never generic advice.",
+            },
+            "confidence": {
+                "enum": ["measured", "estimated", "heuristic"],
+                "description": (
+                    "measured means a shadow table was built and the plans compared; "
+                    "estimated means the engine's own statistics; heuristic means a rule "
+                    "fired on shape alone."
+                ),
+            },
+            "evidence": _ref("evidence"),
+            "expected_effect": _ref("effect_estimate"),
+            "ddl": _nullable("string", "Exact, runnable DDL. Never executed by agentdb."),
+            "rewritten_sql": _nullable("string", "Present only where the fix is mechanical."),
+            "risk_notes": _array(
+                {"type": "string"},
+                "What this costs. A recommendation with a real cost and no note is worse "
+                "than none.",
+            ),
+        },
+        "required": [
+            "kind",
+            "relation",
+            "rationale",
+            "confidence",
+            "evidence",
+            "expected_effect",
+            "ddl",
+            "rewritten_sql",
+            "risk_notes",
+        ],
+        "additionalProperties": False,
+    },
     "exemplar": {
         "type": "object",
         "description": (

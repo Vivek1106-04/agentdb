@@ -29,6 +29,7 @@ from agentdb.adapters.models import (
     SkipIndex,
     WorkloadEntry,
 )
+from agentdb.core.advisor.base import EffectEstimate, Evidence, Recommendation
 from agentdb.core.context import GroundedContext, RelationContext
 from agentdb.core.memory.models import Exemplar, ScoredExemplar
 from agentdb.core.memory.ranking import TERMS
@@ -271,6 +272,43 @@ def grounded_context(value: GroundedContext) -> dict[str, JsonValue]:
         "relations": [relation_context(item) for item in value.relations],
         "rendered": value.render(),
         "size_bytes": value.size_bytes,
+    }
+
+
+def recommendation(value: Recommendation) -> dict[str, JsonValue]:
+    """One proposal, with the evidence and the method behind its estimate (SPEC §9)."""
+    return {
+        "kind": value.kind.value,
+        "relation": relation_ref(value.relation),
+        "rationale": value.rationale,
+        "confidence": value.confidence.value,
+        "evidence": _evidence(value.evidence),
+        "expected_effect": _effect(value.expected_effect),
+        "ddl": value.ddl,
+        "rewritten_sql": value.rewritten_sql,
+        "risk_notes": list(value.risk_notes),
+    }
+
+
+def _evidence(value: Evidence) -> dict[str, JsonValue]:
+    return {
+        "source": value.source,
+        "pruning_ratio": value.pruning_ratio,
+        "pruning_unit": value.pruning_unit,
+        "relation_rows": value.relation_rows,
+        "bytes_read": value.bytes_read,
+        "distinct_counts": [[column, count] for column, count in value.distinct_counts],
+        "workload_queries": value.workload_queries,
+    }
+
+
+def _effect(value: EffectEstimate) -> dict[str, JsonValue]:
+    return {
+        "metric": value.metric,
+        "before": value.before,
+        "after": value.after,
+        "reduction": value.reduction,
+        "method": value.method,
     }
 
 
