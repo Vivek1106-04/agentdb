@@ -22,8 +22,18 @@ from agentdb.core.advisor.base import (
 from agentdb.core.advisor.clickhouse_advisor import ClickHouseAdvisor
 from agentdb.core.advisor.databricks_advisor import DatabricksAdvisor
 from agentdb.core.advisor.rewrites import rewrites, rewritten_query
+from agentdb.core.advisor.shadow import (
+    MARKER,
+    Measurement,
+    ShadowError,
+    ShadowRunner,
+    ShadowValidator,
+    measured,
+    reap_orphans,
+)
 
 __all__ = [
+    "MARKER",
     "ClickHouseAdvisor",
     "ColumnDemand",
     "Confidence",
@@ -32,9 +42,15 @@ __all__ = [
     "EffectEstimate",
     "Evidence",
     "Kind",
+    "Measurement",
     "Recommendation",
+    "ShadowError",
+    "ShadowRunner",
+    "ShadowValidator",
     "demand_from_queries",
+    "measured",
     "rank",
+    "reap_orphans",
     "rewrites",
     "rewritten_query",
     "workload_shapes",
