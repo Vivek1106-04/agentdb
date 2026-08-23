@@ -130,3 +130,19 @@ def test_databricks_falls_back_to_the_shared_advice_where_it_does_not_differ() -
     error = databricks_error("[PARSE_SYNTAX_ERROR] Syntax error. SQLSTATE: 42601")
 
     assert error.suggestion == "check SQL syntax; call dialect_rules for quoting and reserved words"
+
+
+def test_a_refused_setting_is_a_permission_problem_not_a_semantic_one() -> None:
+    """Observed live: the read-only role caps max_execution_time, and code 452 says so.
+
+    Classified as semantic it would have told an agent to go and check its table
+    names, which are fine — the server refused a ceiling the caller tried to raise.
+    """
+    error = clickhouse_error(
+        "Code: 452. DB::Exception: Setting max_execution_time shouldn't be greater "
+        "than 30. (SETTING_CONSTRAINT_VIOLATION)"
+    )
+
+    assert isinstance(error, QueryPermissionError)
+    assert error.suggestion is not None
+    assert "profile" in error.suggestion

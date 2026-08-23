@@ -52,6 +52,7 @@ CLICKHOUSE_ERROR_TYPES: Mapping[int, type[AdapterError]] = {
     307: LimitExceededError,  # TOO_MANY_BYTES
     386: QuerySemanticError,  # NO_COMMON_TYPE
     396: LimitExceededError,  # TOO_MANY_ROWS_OR_BYTES
+    452: QueryPermissionError,  # SETTING_CONSTRAINT_VIOLATION — the role capped it
     497: QueryPermissionError,  # ACCESS_DENIED
 }
 """Codes seen from agent-written SQL. An unlisted code is semantic: the server
@@ -65,7 +66,11 @@ _SUGGESTIONS: Mapping[type[AdapterError], str] = {
         "explicit GROUP BY, or call explain to see the plan"
     ),
     QueryTimeoutError: "add a filter on the sort key or reduce the scanned range, then retry",
-    QueryPermissionError: "this connection is read-only; only SELECT statements are allowed",
+    QueryPermissionError: (
+        "this connection is read-only and its ceilings are capped by the server's "
+        "own profile; only SELECT statements are allowed, and a timeout or row "
+        "limit above the profile's maximum is refused rather than granted"
+    ),
     LimitExceededError: "narrow the query with a filter or a LIMIT; a scan ceiling was hit",
     EngineConnectionError: "check the server is reachable and the credentials are correct",
 }
