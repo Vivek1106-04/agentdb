@@ -219,6 +219,7 @@ def test_the_shipped_provider_catalogue_is_keyed_by_arm() -> None:
         "A4_memory",
         "A5_negmemory",
         "A6_full",
+        "S5_agentdb",
     ]
 
 

@@ -241,6 +241,7 @@ def test_the_shipped_catalogue_names_the_family_a_arms(tmp_path: Path) -> None:
         ("A4_memory", "clickhouse"),
         ("A5_negmemory", "clickhouse"),
         ("A6_full", "clickhouse"),
+        ("S5_agentdb", "clickhouse"),
     ]
     assert all(config.provider.startswith("agentdb.bench.") for config in configs)
     assert configs[0].options["level"] == "stats"
@@ -250,6 +251,7 @@ def test_the_shipped_catalogue_names_the_family_a_arms(tmp_path: Path) -> None:
         True,
         False,
         False,
+        True,
         True,
         True,
         True,

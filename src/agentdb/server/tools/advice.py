@@ -22,7 +22,7 @@ project's own gold executions (SPEC §11.3, arm A6).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final
@@ -42,7 +42,10 @@ from agentdb.core.advisor import (
     Demand,
     Kind,
     Recommendation,
+    ShadowError,
+    ShadowValidator,
     demand_from_queries,
+    measured,
     rewrites,
     workload_shapes,
 )
@@ -203,6 +206,8 @@ def _design_tool(context: ServerContext, name: str, kind: Kind) -> ToolDef:
         _require_engine(context, name)
         inputs = await gather(context, args)
         found = [item for item in recommend(context, inputs) if item.kind is kind]
+        if _wants_validation(args):
+            found = await _validate(context, args, inputs, found)
         return {
             "relation": serialize.relation_ref(inputs.ref),
             "recommendations": [serialize.recommendation(item) for item in found],
@@ -259,6 +264,74 @@ def _suggest_rewrite(context: ServerContext) -> ToolDef:
     )
 
 
+def _wants_validation(args: Mapping[str, JsonValue]) -> bool:
+    value = args.get("validate")
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ToolError("argument 'validate' must be a boolean")
+    return value
+
+
+async def _validate(
+    context: ServerContext,
+    args: Mapping[str, JsonValue],
+    inputs: AdviceInputs,
+    found: Sequence[Recommendation],
+) -> list[Recommendation]:
+    """Measure the top candidate on a shadow table, and only the top candidate.
+
+    One, not all of them: each validation copies a sample of the table, and on a
+    warehouse that is real money. The rest keep their estimates and say so, which
+    is the honest state — nobody measured them.
+    """
+    if not found:
+        return list(found)
+    if context.shadow is None:
+        raise ToolError(
+            "validation needs a writable connection this server was not given",
+            suggestion=(
+                "configure a second, write-privileged principal and a scratch schema; "
+                "the read-only role the tools use cannot create a shadow table"
+            ),
+        )
+    probe = optional_str(args, "sql")
+    if probe is None:
+        raise ToolError(
+            "validation needs the query to measure",
+            suggestion="pass the query you want pruning measured for as 'sql'",
+        )
+
+    try:
+        validator = ShadowValidator(
+            runner=context.shadow,
+            config=context.config,
+            scratch_schema=context.scratch_schema,
+        )
+    except ShadowError as exc:
+        raise ToolError(str(exc), suggestion="set AGENTDB_ALLOW_SHADOW=true to opt in") from exc
+
+    best = found[0]
+    measurement = await validator.measure(
+        ref=inputs.ref,
+        layout=inputs.layout,
+        probe_sql=probe,
+        baseline=best.evidence.pruning_ratio,
+        order_by=_key_columns(best, Kind.ORDER_BY),
+        index_ddl=best.ddl if best.kind is Kind.SKIP_INDEX else None,
+        cluster_by=_key_columns(best, Kind.CLUSTER_BY),
+        stats_columns=_key_columns(best, Kind.STATS_COLUMNS),
+    )
+    return [measured(best, measurement), *found[1:]]
+
+
+def _key_columns(recommendation: Recommendation, kind: Kind) -> tuple[str, ...]:
+    """The columns a candidate proposes, for the kinds whose DDL names a key."""
+    if recommendation.kind is not kind:
+        return ()
+    return tuple(column for column, _ in recommendation.evidence.distinct_counts)
+
+
 def _require_engine(context: ServerContext, name: str) -> None:
     """Refuse advice this engine has no concept of, by name."""
     engine = context.adapter.engine
@@ -287,6 +360,16 @@ def _advice_input_schema() -> dict[str, JsonValue]:
                     "The query prompting the question. Counted alongside the mined "
                     "workload, and the only demand signal where the connection "
                     "cannot read the engine's log."
+                ),
+            },
+            "validate": {
+                "type": "boolean",
+                "description": (
+                    "Measure the top candidate on a shadow table rather than "
+                    "estimating it: a sampled copy of the relation carrying the "
+                    "proposed design, planned and dropped. Off by default, needs a "
+                    "writable connection and AGENTDB_ALLOW_SHADOW, and costs a real "
+                    "table copy — on a warehouse, real money."
                 ),
             },
             "hours": {

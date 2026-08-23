@@ -149,12 +149,22 @@ def memory_store(connection: FakeConnection | None = None) -> ExemplarStore:
     return ExemplarStore(connection or memory_connection(), clock=lambda: MEMORY_NOW)
 
 
+def scripted_clickhouse_adapter(plan: dict[str, Any] | None = None) -> FakeAdapter:
+    """The ClickBench-shaped fake with plan, result and workload scripted.
+
+    Exposed so a test can build its own catalog around it — one with a shadow
+    runner, say — without reaching for the private scripting helper.
+    """
+    adapter = clickhouse_hits_fixture()
+    _script(adapter, plan or CLICKHOUSE_PLAN)
+    return adapter
+
+
 def clickhouse_catalog(
     plan: dict[str, Any] | None = None, config: Config | None = None
 ) -> tuple[ToolCatalog, FakeAdapter]:
     """A catalog over the ClickBench-shaped fake, with everything scripted."""
-    adapter = clickhouse_hits_fixture()
-    _script(adapter, plan or CLICKHOUSE_PLAN)
+    adapter = scripted_clickhouse_adapter(plan)
     return build_catalog(adapter, config, store=memory_store()), adapter
 
 

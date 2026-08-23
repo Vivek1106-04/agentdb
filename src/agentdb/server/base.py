@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from agentdb.adapters import Adapter, Capability, RelationRef
 from agentdb.config import Config
 from agentdb.core import ContextBuilder, PlanExplainer
+from agentdb.core.advisor import ShadowRunner
 from agentdb.core.memory.store import ExemplarStore
 from agentdb.server.schemas import JsonValue
 
@@ -65,6 +66,19 @@ class ServerContext:
 
     adapter: Adapter
     config: Config = field(default_factory=Config)
+    shadow: ShadowRunner | None = None
+    """A writable channel for shadow validation, when the operator configured one.
+
+    Absent by default and absent in every read-only deployment: the adapter beside
+    it is served by a role that cannot write, which is the boundary that makes
+    this server safe to hand an agent (SPEC §13.3). Without this — and without
+    AGENTDB_ALLOW_SHADOW — advice is estimated, which is the correct default.
+    """
+
+    scratch_schema: str | None = None
+    """Where shadow tables are created on Databricks. Never the catalog under
+    measurement, and never ``samples``."""
+
     store: ExemplarStore | None = None
     """The exemplar store, when one is configured (SPEC §10).
 

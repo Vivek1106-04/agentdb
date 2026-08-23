@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from agentdb.adapters import Adapter, AdapterError
 from agentdb.config import Config
+from agentdb.core.advisor import ShadowRunner
 from agentdb.core.memory.store import ExemplarStore
 from agentdb.server.base import ServerContext, ToolDef, ToolError
 from agentdb.server.schemas import JsonValue
@@ -85,7 +86,15 @@ def build_catalog(
     adapter: Adapter,
     config: Config | None = None,
     store: ExemplarStore | None = None,
+    shadow: ShadowRunner | None = None,
+    scratch_schema: str | None = None,
 ) -> ToolCatalog:
-    """The catalog for one engine connection, plus the memory it has, if any."""
-    context = ServerContext(adapter=adapter, config=config or Config(), store=store)
+    """The catalog for one engine connection, plus whatever else it was given."""
+    context = ServerContext(
+        adapter=adapter,
+        config=config or Config(),
+        store=store,
+        shadow=shadow,
+        scratch_schema=scratch_schema,
+    )
     return ToolCatalog(tools=all_tools(context))
