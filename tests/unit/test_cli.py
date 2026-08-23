@@ -744,3 +744,31 @@ def test_the_shipped_catalogue_covers_the_a0_to_a3_ladder_on_both_engines() -> N
     for arm in ("A1_stats", "A2_layout", "A3_plan"):
         for engine in ("clickhouse", "databricks"):
             assert select_provider(arm, configs, engine) is not None, f"{arm} on {engine}"
+
+
+async def test_a_failure_while_building_arms_surfaces_itself_and_still_cleans_up() -> None:
+    """The missing-API-key path, which is the first one a new reader walks into.
+
+    A cleanup that referred to systems the run never managed to build masked the
+    real error behind an UnboundLocalError — an exit code and a traceback that
+    said nothing about the key.
+    """
+    executor = FakeExecutor()
+
+    async def make_executor() -> QueryExecutor:
+        return executor
+
+    def refuse_to_build() -> ModelClient:
+        raise ModelError("ANTHROPIC_API_KEY is not set; export it or pass api_key=")
+
+    with pytest.raises(ModelError, match="ANTHROPIC_API_KEY"):
+        await run_bench(
+            BenchOptions(seeds=(0,), limit=1),
+            executor_factory=make_executor,
+            client_factory=refuse_to_build,
+            write=lambda _line: None,
+            tool_client_factory=StubToolClient,
+            connector=_refuse_to_connect,
+        )
+
+    assert executor.closed, "the engine connection is released even on the failing path"

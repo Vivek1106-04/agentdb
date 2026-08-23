@@ -57,12 +57,14 @@ class GoldReplayClient:
     async def complete(
         self, *, system: str, turns: tuple[Turn, ...], model: ModelSpec, seed: int
     ) -> ModelResponse:
-        question = turns[-1].content
+        # Every turn, not just the last: a plan-review arm's final turn is the
+        # engine's plan, and the question it is about was asked two turns back.
+        conversation = "\n".join(turn.content for turn in turns)
         sql = next(
-            (gold for asked, gold in self.answers.items() if asked in question),
+            (gold for asked, gold in self.answers.items() if asked in conversation),
             "SELECT 1",
         )
-        self.calls.append(question)
+        self.calls.append(conversation)
         return ModelResponse(
             text=f"```sql\n{sql}\n```",
             tokens=TokenUsage(input_tokens=len(system) // 4, output_tokens=len(sql) // 4),
@@ -174,3 +176,48 @@ async def test_the_traces_a_run_writes_are_the_traces_the_report_reads(
     assert "`A0_baseline`" in markdown
     assert "100.0%" in markdown
     assert (tmp_path / "REPORT.md").is_file()
+
+
+async def test_the_whole_ladder_runs_through_the_runner_on_live_infrastructure(
+    tmp_path: Path, gold_client: GoldReplayClient
+) -> None:
+    """A0 to A6 and S5, built by the CLI's own arm loader against real engines.
+
+    The arms below A4 need only ClickHouse. A4 upward need the exemplar store
+    too, and A6 additionally reads its committed reference workload — so this is
+    the test that says the ladder the report will publish can actually be built,
+    end to end, by the code path `make bench` uses.
+    """
+    arms = ("A0_baseline", "A2_layout", "A3_plan", "A4_memory", "A5_negmemory", "A6_full")
+
+    cells = await run_bench(
+        BenchOptions(
+            suite="clickbench_nl",
+            engine="clickhouse",
+            arms=arms,
+            models=(MODEL,),
+            seeds=(0,),
+            limit=1,
+            out=tmp_path,
+        ),
+        executor_factory=live_executor,
+        client_factory=lambda: gold_client,
+        write=lambda _line: None,
+    )
+
+    assert {cell.system for cell in cells} == set(arms)
+    assert all(cell.score.execution_accuracy for cell in cells), [
+        cell.system for cell in cells if not cell.score.execution_accuracy
+    ]
+
+    traces = [
+        json.loads(line)
+        for path in tmp_path.glob("*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    context_bytes = {record["system"]: record["context_bytes"] for record in traces}
+    assert context_bytes["A0_baseline"] < context_bytes["A2_layout"] < context_bytes["A6_full"], (
+        "each rung of the ladder must carry strictly more than the one below it"
+    )
+    fingerprints = {record["system"]: record["config_fingerprint"] for record in traces}
+    assert len(set(fingerprints.values())) == len(arms), "every arm is separately identified"

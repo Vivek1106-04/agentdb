@@ -347,6 +347,10 @@ async def run_bench(
 
     executor = await executor_factory()
     sessions: list[McpSession] = []
+    systems: tuple[SystemUnderTest, ...] = ()
+    """Bound before the try, so a failure *inside* it — a missing API key, an arm
+    with no provider for this engine — cleans up and surfaces itself rather than
+    dying in the finally with an UnboundLocalError that hides the real cause."""
     try:
         systems = await build_systems(
             options.arms,
