@@ -1,6 +1,6 @@
 # agentdb
 
-[![CI](https://github.com/vivekgangavarapu/agentdb/actions/workflows/ci.yml/badge.svg)](https://github.com/vivekgangavarapu/agentdb/actions/workflows/ci.yml)
+[![CI](https://github.com/Vivek1106-04/agentdb/actions/workflows/ci.yml/badge.svg)](https://github.com/Vivek1106-04/agentdb/actions/workflows/ci.yml)
 ![coverage 100%](https://img.shields.io/badge/coverage-100%25-brightgreen)
 ![license Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)
 
