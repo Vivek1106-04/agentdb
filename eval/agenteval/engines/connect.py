@@ -323,10 +323,15 @@ def _text(value: object) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
-async def build_databricks_client(
+def build_workspace(
     target: DatabricksTarget, *, importer: Importer = importlib.import_module
-) -> DatabricksClient:
-    """Connect, failing with a message that says what to install or configure."""
+) -> Any:
+    """The workspace client, failing with what to install or configure.
+
+    Shared by the executor and by the Genie arm (SPEC §11.5.2): both reach the
+    same workspace as the same principal, and a second copy of this would be a
+    second place for the credential rules to drift.
+    """
     try:
         module = importer(DBX_SDK)
     except ImportError as exc:
@@ -336,7 +341,7 @@ async def build_databricks_client(
         ) from exc
 
     try:
-        workspace = module.WorkspaceClient(
+        return module.WorkspaceClient(
             host=target.host,
             token=target.token or None,
             client_id=target.client_id or None,
@@ -347,6 +352,12 @@ async def build_databricks_client(
             f"cannot reach the Databricks workspace at {target.host}: {exc}"
         ) from exc
 
+
+async def build_databricks_client(
+    target: DatabricksTarget, *, importer: Importer = importlib.import_module
+) -> DatabricksClient:
+    """Connect, failing with a message that says what to install or configure."""
+    workspace = build_workspace(target, importer=importer)
     service = importer(DBX_PARAMETER_MODULE)
     client: DatabricksClient = StatementExecutionClient(
         api=workspace.statement_execution,

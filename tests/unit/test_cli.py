@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -23,10 +24,12 @@ from agenteval.cli import (
     build_systems,
     client_for,
     default_client,
+    default_conversation,
     default_executor,
     default_tool_client,
     executor_factory_for,
     load_grounded_configs,
+    load_managed_catalogue,
     load_server_configs,
     parse_args,
     parse_model,
@@ -47,12 +50,15 @@ from agenteval.report import ReportError
 from agenteval.runner import Cell
 from agenteval.scorer import Score
 from agenteval.systems.base import SystemUnderTest
+from agenteval.systems.clickhouse_agents import ClickHouseAgentsConversation
+from agenteval.systems.genie import GenieConversation
+from agenteval.systems.managed import ManagedAnswer, ManagedConfig
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
 from agenteval.systems.providers import ProviderConfig, load_provider_configs
 from agenteval.systems.raw_schema import ARM_NAME
 from agenteval.tasks import load_suite
 from agenteval.traces import read_records
-from tests.harness_fakes import FakeExecutor, ScriptedModelClient
+from tests.harness_fakes import FakeExecutor, ScriptedModelClient, sample_task
 
 GOOD_REPLY = "```sql\nSELECT count() FROM hits\n```"
 
@@ -315,6 +321,82 @@ def test_the_summary_reports_execution_accuracy_per_arm() -> None:
 
 
 # --------------------------------------------------------------------------
+# managed services — SPEC 11.5.1, 11.5.2
+# --------------------------------------------------------------------------
+
+AGENTS_ARM = ManagedConfig(
+    name="S3_clickhouse_agents",
+    kind="clickhouse_agents",
+    version="beta-2026-05",
+    target_id="agent-1",
+)
+GENIE_ARM = ManagedConfig(
+    name="S4a_genie_minimal", kind="genie", version="2026-08", target_id="space-1"
+)
+
+
+@dataclass
+class StubConversation:
+    """A managed service that always writes the same query."""
+
+    sql: str = "SELECT count() FROM hits"
+
+    async def ask(self, target_id: str, question: str) -> ManagedAnswer:
+        return ManagedAnswer(sql=self.sql, text=f"asked {target_id}: {question}")
+
+
+async def test_a_managed_arm_is_built_from_its_committed_config() -> None:
+    systems = await _build(
+        [AGENTS_ARM.name],
+        managed=(AGENTS_ARM,),
+        tasks=[sample_task()],
+        conversations=lambda _: StubConversation(),
+    )
+
+    assert [system.name for system in systems] == [AGENTS_ARM.name]
+    assert systems[0].controls_model is False
+
+
+async def test_a_managed_arm_built_without_the_suite_is_refused() -> None:
+    with pytest.raises(CliError, match="checked against the suite"):
+        await _build(
+            [AGENTS_ARM.name], managed=(AGENTS_ARM,), conversations=lambda _: StubConversation()
+        )
+
+
+def test_a_missing_managed_file_simply_means_no_managed_arms(tmp_path: Path) -> None:
+    assert load_managed_catalogue(tmp_path / "absent.yaml") == ()
+
+
+def test_the_shipped_managed_catalogue_holds_the_three_arms_the_spec_names() -> None:
+    names = {config.name for config in load_managed_catalogue(Path("eval/managed.yaml"))}
+
+    assert names == {"S3_clickhouse_agents", "S4a_genie_minimal", "S4b_genie_curated"}
+
+
+def test_the_genie_client_is_built_for_a_genie_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENTEVAL_DBX_HOST", "https://dbc-1.cloud.databricks.com")
+    monkeypatch.setenv("AGENTEVAL_DBX_WAREHOUSE_ID", "w1")
+    monkeypatch.setenv("AGENTEVAL_DBX_TOKEN", "t")
+    monkeypatch.setattr(
+        "agenteval.cli.build_genie_conversation", lambda target: GenieConversation(api=target)
+    )
+
+    assert isinstance(default_conversation(GENIE_ARM), GenieConversation)
+
+
+def test_the_agents_client_is_built_for_a_clickhouse_agents_arm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTEVAL_CH_AGENTS_HOST", "https://api.clickhouse.cloud")
+
+    conversation = default_conversation(AGENTS_ARM)
+
+    assert isinstance(conversation, ClickHouseAgentsConversation)
+    assert conversation.target.host == "https://api.clickhouse.cloud"
+
+
+# --------------------------------------------------------------------------
 # running end to end
 # --------------------------------------------------------------------------
 
@@ -384,6 +466,56 @@ async def test_a_run_writes_traces_and_reports_a_number(
     written = list(tmp_path.glob("*.jsonl"))
     assert len(written) == 1
     assert len(read_records(written[0])) == 2
+
+
+async def test_a_managed_run_commits_the_configuration_it_measured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fixture_suite(tmp_path, monkeypatch)
+    managed = tmp_path / "managed.yaml"
+    managed.write_text(
+        "- name: S3_clickhouse_agents\n"
+        "  kind: clickhouse_agents\n"
+        "  version: beta-2026-05\n"
+        "  target_id: agent-1\n"
+        "  tables: [agentdb.hits]\n",
+        encoding="utf-8",
+    )
+    executor = FakeExecutor()
+    lines: list[str] = []
+
+    async def make_executor() -> QueryExecutor:
+        return executor
+
+    cells = await run_bench(
+        BenchOptions(
+            arms=("S3_clickhouse_agents",),
+            seeds=(0,),
+            limit=1,
+            out=tmp_path,
+            managed=managed,
+        ),
+        executor_factory=make_executor,
+        client_factory=ScriptedModelClient,
+        write=lines.append,
+        tool_client_factory=StubToolClient,
+        connector=_refuse_to_connect,
+        conversations=lambda _: StubConversation(),
+    )
+
+    record = json.loads(next(tmp_path.glob("*.managed.json")).read_text(encoding="utf-8"))
+    assert record[0]["target_id"] == "agent-1"
+    assert record[0]["tables"] == ["agentdb.hits"]
+    assert any("managed service configs" in line for line in lines)
+    assert cells[0].model is None
+
+
+async def test_a_run_without_a_managed_arm_commits_no_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _run(BenchOptions(seeds=(0,), limit=1, out=tmp_path), [], tmp_path, monkeypatch)
+
+    assert not list(tmp_path.glob("*.managed.json"))
 
 
 async def test_both_arms_run_in_one_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

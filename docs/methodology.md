@@ -138,6 +138,32 @@ carries 16k–30k tokens of its own scaffolding and whatever instruction files t
 operator's machine supplies; that is disclosed on every row, and its numbers
 should be read as "this product on this machine", not "this model".
 
+### A managed service's accuracy is partly a fact about its setup
+
+ClickHouse Agents and Databricks AI/BI Genie are configured, not just connected:
+a Genie space carries a table scope, instruction text, and curated example
+queries, and its accuracy is a function of all three. Measuring one setup and
+calling it "Genie's accuracy" would be the unfair benchmark this project exists
+not to be. So Genie is measured in two configurations — `S4a_genie_minimal`,
+scoped to the suite's tables with no instructions and no examples, and
+`S4b_genie_curated`, a realistic deployment — and the report prints an
+"incomplete pair" warning above the table if only one of them ran. Neither
+number should be quoted without the other.
+
+Everything each service was given is committed: `eval/managed.yaml` holds the
+configurations, and every run copies them to `results/raw/<run-id>.managed.json`
+beside its traces. No curated example may be a gold query from any suite or a
+paraphrase of one; the check runs before the arm is built and fails the run, and
+a unit test re-runs it against every shipped suite on every commit.
+
+These arms select their own models, so their rows are never a controlled model
+comparison against an agentdb-on-Opus-5 row. Where a service answers in prose
+without writing a query, that cell is scored incorrect with `error_class`
+`declined` and counted in the leaderboard's own `declined` column, because a
+system that abstains is doing something different from one that guesses wrong.
+What is graded is the SQL the service produced, re-executed through the
+harness's own read-only connection — never the service's own formatted reply.
+
 ### Beta products move
 
 Systems in public beta change between releases. Every Family S row is

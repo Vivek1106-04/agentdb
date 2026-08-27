@@ -22,9 +22,19 @@ from agenteval.stats import (
     mcnemar,
     paired_bootstrap_difference,
 )
+from agenteval.systems.base import DECLINED
 from agenteval.traces import read_records
 
 REPORT_TITLE = "# agentdb benchmark results"
+
+PAIRED_CONFIGURATIONS: tuple[tuple[str, str], ...] = (("S4a_genie_minimal", "S4b_genie_curated"),)
+"""Arms that may never be published one without the other (SPEC §11.5.2).
+
+Genie's accuracy is a function of how its space was curated, so a single
+configuration is not a number about the product. When only one half of a pair
+ran, the report says so at the top of the table rather than letting the row be
+quoted alone.
+"""
 
 CELL_KEY = ("task_id", "seed", "model")
 """What makes two rows the same measurement on different arms."""
@@ -50,6 +60,13 @@ class ArmSummary:
     accuracy_at_1: float
     valid_sql: float
     mean_retries: float
+    declined: float
+    """Share of cells the arm answered without writing a query at all.
+
+    Its own column because a managed service that abstains is doing something
+    different from one that guesses wrong, and averaging the two together hides
+    the distinction (SPEC §11.5.2)."""
+
     errors: Mapping[str, int]
     mean_input_tokens: float
     mean_output_tokens: float
@@ -154,6 +171,7 @@ def render(
         _render_provenance(records),
         "",
         *_render_charts(charts),
+        *_render_unpaired(summaries),
         _render_leaderboard(summaries),
         "",
         _render_errors(summaries),
@@ -319,6 +337,7 @@ def _summarize_group(
         accuracy_at_1=_mean(float(bool(r["accuracy_at_1"])) for r in rows),
         valid_sql=_mean(float(bool(r["valid_sql"])) for r in rows),
         mean_retries=_mean(float(r["retries"]) for r in rows),
+        declined=_mean(float(str(r["error_class"]) == DECLINED) for r in rows),
         errors=Counter(str(r["error_class"]) for r in rows if r["error_class"] != "none"),
         mean_input_tokens=_mean(float(r["input_tokens"]) for r in rows),
         mean_output_tokens=_mean(float(r["output_tokens"]) for r in rows),
@@ -354,12 +373,39 @@ def _render_provenance(records: Sequence[Mapping[str, Any]]) -> str:
     )
 
 
+def _render_unpaired(summaries: Sequence[ArmSummary]) -> list[str]:
+    """Warn, above the table, about a configuration reported without its pair."""
+    measured = {summary.system for summary in summaries}
+    lonely = [
+        (present, absent)
+        for pair in PAIRED_CONFIGURATIONS
+        for present, absent in (pair, pair[::-1])
+        if present in measured and absent not in measured
+    ]
+    if not lonely:
+        return []
+
+    return [
+        "> **Incomplete pair.** "
+        + " ".join(
+            f"`{present}` ran but `{absent}` did not, so its accuracy is a fact about "
+            "one space configuration and not about the product (SPEC §11.5.2); it must "
+            "not be quoted on its own."
+            for present, absent in lonely
+        ),
+        "",
+    ]
+
+
 def _render_leaderboard(summaries: Sequence[ArmSummary]) -> str:
-    header = "| arm | model | EX (95% CI) | EX@1 | valid SQL | retries | in tok | out tok | ctx B |"
-    divider = "|---|---|---|---|---|---|---|---|---|"
+    header = (
+        "| arm | model | EX (95% CI) | EX@1 | valid SQL | declined | retries | "
+        "in tok | out tok | ctx B |"
+    )
+    divider = "|---|---|---|---|---|---|---|---|---|---|"
     rows = [
         f"| `{s.system}` | {s.model or '_system-chosen_'} | {s.execution_accuracy} | "
-        f"{s.accuracy_at_1:.1%} | {s.valid_sql:.1%} | {s.mean_retries:.2f} | "
+        f"{s.accuracy_at_1:.1%} | {s.valid_sql:.1%} | {s.declined:.1%} | {s.mean_retries:.2f} | "
         f"{s.mean_input_tokens:.0f} | {s.mean_output_tokens:.0f} | {s.mean_context_bytes:.0f} |"
         for s in summaries
     ]

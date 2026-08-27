@@ -1,0 +1,96 @@
+# Managed analytics services under test (SPEC §11.5.1, §11.5.2 — Family S).
+#
+# These are the arms nobody outside the vendor can measure: ClickHouse Agents
+# and Databricks AI/BI Genie are closed, cloud-only products with no published
+# execution-accuracy number. Measuring them is the point of the harness, and
+# doing it fairly is the point of this file.
+#
+# Everything a service was given is committed here and copied beside the traces
+# of any run that used it (`results/raw/<run-id>.managed.json`). A Genie row
+# without its space configuration would say nothing at all: the number is a
+# function of the curation, which is why §11.5.2 requires both configurations
+# and forbids publishing either alone.
+#
+# `target_id` is workspace-specific and is pasted in when the space or agent is
+# created. The placeholders below are deliberate: a run naming one of these arms
+# fails at the vendor call with a clear error rather than measuring something
+# nobody can identify later. Credentials never appear here — they are read from
+# AGENTEVAL_DBX_* and AGENTEVAL_CH_AGENTS_* at launch.
+
+- name: S3_clickhouse_agents
+  kind: clickhouse_agents
+  version: "beta-2026-05"
+  target_id: REPLACE_WITH_AGENT_ID
+  tables: ["agentdb.hits"]
+  notes: >-
+    Default configuration, no instructions and no curated examples: the "what do
+    you get out of the box" number, comparable to A0_baseline and to S1/S2.
+    Public beta — the version above is the build measured, and §11.5.1 requires
+    the report to say plainly that beta products move.
+  # How the beta's reply is read. Held as config rather than hardcoded so the
+  # trace records exactly which fields were taken as SQL and as prose, and so a
+  # payload change is a visible diff rather than an arm that silently scores zero.
+  response:
+    path: /v1/agents/{target_id}/conversations
+    question_field: message
+    sql_path: sql
+    text_path: text
+
+# The two Genie configurations of §11.5.2. Never report one without the other:
+# a lavishly curated space scores well and says nothing about agentic NL-to-SQL,
+# and a bare one scores badly and says nothing about the product. The report
+# prints an "incomplete pair" warning above the table if only one of them ran.
+
+- name: S4a_genie_minimal
+  kind: genie
+  version: "2026-08"
+  target_id: REPLACE_WITH_GENIE_SPACE_ID
+  tables: ["samples.tpch.customer", "samples.tpch.orders", "samples.tpch.lineitem",
+           "samples.tpch.part", "samples.tpch.partsupp", "samples.tpch.supplier",
+           "samples.tpch.nation", "samples.tpch.region"]
+  notes: >-
+    Space scoped to the suite's tables, with no instructions and no curated
+    example SQL. The out-of-the-box number, comparable to A0_baseline and S1/S2.
+
+- name: S4b_genie_curated
+  kind: genie
+  version: "2026-08"
+  target_id: REPLACE_WITH_GENIE_SPACE_ID
+  tables: ["samples.tpch.customer", "samples.tpch.orders", "samples.tpch.lineitem",
+           "samples.tpch.part", "samples.tpch.partsupp", "samples.tpch.supplier",
+           "samples.tpch.nation", "samples.tpch.region"]
+  notes: >-
+    The realistic deployment, and the ceiling a well-run space reaches. Authored
+    before the first run and git-timestamped; never revised in response to a
+    score. The instructions are the kind any real TPC-H space would carry — the
+    rule §11.5.2 imposes is on the *examples*, which may not be drawn from the
+    suite, and `check_example_overlap` fails the run if any of them are.
+  instructions: >-
+    This workspace holds the TPC-H sample dataset at scale factor 5. Revenue
+    means l_extendedprice * (1 - l_discount) unless the question says otherwise,
+    and profit additionally subtracts ps_supplycost * l_quantity. Dates are
+    stored as DATE. A customer's market segment is c_mktsegment; an order's
+    priority is o_orderpriority, whose values carry a numeric prefix such as
+    '1-URGENT'. Answer with a single SQL query against these tables.
+  examples:
+    - question: Which five parts have the highest supply cost recorded by any supplier?
+      sql: >-
+        SELECT ps_partkey, MAX(ps_supplycost) AS max_supply_cost
+        FROM samples.tpch.partsupp
+        GROUP BY ps_partkey
+        ORDER BY max_supply_cost DESC
+        LIMIT 5
+    - question: How much stock is available in total for each part brand?
+      sql: >-
+        SELECT p.p_brand, SUM(ps.ps_availqty) AS available
+        FROM samples.tpch.partsupp AS ps
+        JOIN samples.tpch.part AS p ON p.p_partkey = ps.ps_partkey
+        GROUP BY p.p_brand
+        ORDER BY p.p_brand
+    - question: List each region with the number of nations it contains.
+      sql: >-
+        SELECT r.r_name, COUNT(*) AS nations
+        FROM samples.tpch.region AS r
+        JOIN samples.tpch.nation AS n ON n.n_regionkey = r.r_regionkey
+        GROUP BY r.r_name
+        ORDER BY r.r_name

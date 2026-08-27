@@ -18,9 +18,9 @@ is called: every number below is a function of the committed traces.
 
 ## Execution accuracy
 
-| arm | model | EX (95% CI) | EX@1 | valid SQL | retries | in tok | out tok | ctx B |
-|---|---|---|---|---|---|---|---|---|
-| `S5_claude_code` | claude-cli/sonnet | 100.0% [100.0%, 100.0%] | 100.0% | 100.0% | 0.00 | 2 | 104 | 4924 |
+| arm | model | EX (95% CI) | EX@1 | valid SQL | declined | retries | in tok | out tok | ctx B |
+|---|---|---|---|---|---|---|---|---|---|
+| `S5_claude_code` | claude-cli/sonnet | 100.0% [100.0%, 100.0%] | 100.0% | 100.0% | 0.0% | 0.00 | 2 | 104 | 4924 |
 
 ## Error taxonomy
 

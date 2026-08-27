@@ -21,10 +21,25 @@ from typing import Literal, Protocol, runtime_checkable
 from agenteval.tasks import Task
 
 ErrorClass = Literal[
-    "syntax", "semantic", "plan_rejection", "timeout", "permission", "limit_exceeded", "none"
+    "syntax",
+    "semantic",
+    "plan_rejection",
+    "timeout",
+    "permission",
+    "limit_exceeded",
+    "declined",
+    "none",
 ]
 """Failure taxonomy the report distributes over (SPEC §11.1). Declared locally so
 agenteval stays independent of any system it measures."""
+
+DECLINED: ErrorClass = "declined"
+"""A system that answered without producing a query at all.
+
+Its own class rather than a silent ``no_query``, because abstention is a
+different thing from failure and a managed service that knows when to abstain
+deserves that shown rather than averaged away (SPEC §11.5.2). The report counts
+it as its own column and still scores the cell as incorrect."""
 
 
 @dataclass(frozen=True, slots=True)

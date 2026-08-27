@@ -136,6 +136,38 @@ def test_the_leaderboard_carries_the_interval_and_the_cost() -> None:
     assert "`A0_baseline`" in markdown
 
 
+def test_declines_get_their_own_column() -> None:
+    summaries = summarize(
+        [
+            record(task_id="t1", error_class="declined", execution_accuracy=False),
+            record(task_id="t2"),
+        ]
+    )
+
+    assert summaries[0].declined == pytest.approx(0.5)
+    assert "| declined |" in render(
+        [record(task_id="t1", error_class="declined", execution_accuracy=False)]
+    )
+
+
+def test_a_genie_configuration_reported_without_its_pair_is_flagged() -> None:
+    markdown = render([record(system="S4b_genie_curated", controls_model=False, model=None)])
+
+    assert "Incomplete pair" in markdown
+    assert "`S4a_genie_minimal` did not" in markdown
+
+
+def test_both_genie_configurations_together_are_reported_plainly() -> None:
+    markdown = render(
+        [
+            record(system="S4a_genie_minimal", controls_model=False, model=None),
+            record(system="S4b_genie_curated", controls_model=False, model=None),
+        ]
+    )
+
+    assert "Incomplete pair" not in markdown
+
+
 def test_a_clean_run_says_so_instead_of_printing_an_empty_table() -> None:
     assert "No failures recorded." in render([record()])
 

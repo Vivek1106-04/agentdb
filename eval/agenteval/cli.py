@@ -46,7 +46,17 @@ from agenteval.suites import SUITES_DIR, load_builtin
 from agenteval.systems.base import ModelSpec, SystemUnderTest
 from agenteval.systems.claude_code import ARM_NAME as CLAUDE_CODE_ARM
 from agenteval.systems.claude_code import ClaudeCodeSystem
+from agenteval.systems.clickhouse_agents import ClickHouseAgentsTarget
+from agenteval.systems.clickhouse_agents import build_conversation as build_agents_conversation
+from agenteval.systems.genie import build_genie_conversation
 from agenteval.systems.grounded import GroundedSystem
+from agenteval.systems.managed import (
+    Conversation,
+    ManagedConfig,
+    ManagedSystem,
+    load_managed_configs,
+    write_config_record,
+)
 from agenteval.systems.mcp_generic import McpSystem
 from agenteval.systems.oracle import ARM_NAME as ORACLE_ARM
 from agenteval.systems.oracle import OracleSystem
@@ -54,7 +64,7 @@ from agenteval.systems.plan_aware import PlanAdvisor, PlanAwareSystem
 from agenteval.systems.providers import ProviderConfig, load_provider, load_provider_configs
 from agenteval.systems.raw_schema import ARM_NAME as BASELINE_ARM
 from agenteval.systems.raw_schema import RawSchemaSystem
-from agenteval.tasks import Engine, gold_sql_fingerprint
+from agenteval.tasks import Engine, Task, gold_sql_fingerprint
 from agenteval.traces import TraceWriter
 
 DEFAULT_SUITE = "clickbench_nl"
@@ -68,7 +78,11 @@ S measurement and never a Family A one."""
 DEFAULT_RAW = Path("results/raw")
 DEFAULT_SERVERS = Path("eval/servers.yaml")
 DEFAULT_PROVIDERS = Path("eval/providers.yaml")
+DEFAULT_MANAGED = Path("eval/managed.yaml")
 DEFAULT_REPORT = Path("results/REPORT.md")
+MANAGED_RECORD_SUFFIX = ".managed.json"
+"""Where a run commits the full configuration of every managed service it
+measured, beside the traces it produced (SPEC §11.5.2)."""
 
 QUICK_TASKS = 5
 """``--quick`` exists so a reader can reproduce *something* in five minutes
@@ -90,6 +104,7 @@ ExecutorFactory = Callable[[], Awaitable[QueryExecutor]]
 ClientFactory = Callable[[], ModelClient]
 ToolClientFactory = Callable[[], ToolUsingClient]
 Connector = Callable[[McpServerConfig], Awaitable[McpSession]]
+ConversationFactory = Callable[[ManagedConfig], Conversation]
 
 
 class CliError(RuntimeError):
@@ -109,6 +124,7 @@ class BenchOptions:
     out: Path = DEFAULT_RAW
     servers: Path = DEFAULT_SERVERS
     providers: Path = DEFAULT_PROVIDERS
+    managed: Path = DEFAULT_MANAGED
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +172,12 @@ def parse_args(argv: Sequence[str]) -> Command:
     bench.add_argument(
         "--providers", type=Path, default=DEFAULT_PROVIDERS, help="Family A provider configs"
     )
+    bench.add_argument(
+        "--managed",
+        type=Path,
+        default=DEFAULT_MANAGED,
+        help="managed service configs (ClickHouse Agents, Genie spaces)",
+    )
 
     report = commands.add_parser("report", help="regenerate REPORT.md from traces")
     report.add_argument("--from-raw", type=Path, default=DEFAULT_RAW, dest="from_raw")
@@ -185,6 +207,7 @@ def parse_args(argv: Sequence[str]) -> Command:
         out=args.out,
         servers=args.servers,
         providers=args.providers,
+        managed=args.managed,
     )
 
 
@@ -226,6 +249,23 @@ def load_provider_catalogue(path: Path) -> tuple[ProviderConfig, ...]:
     return load_provider_configs(path) if path.is_file() else ()
 
 
+def load_managed_catalogue(path: Path) -> tuple[ManagedConfig, ...]:
+    """Every managed-service entry in ``path``. A missing file means no S3/S4 arms."""
+    return load_managed_configs(path) if path.is_file() else ()
+
+
+def default_conversation(config: ManagedConfig) -> Conversation:
+    """The live client for one managed arm, built from the environment.
+
+    Credentials are read here and nowhere else, at the moment an arm that needs
+    them is actually built: a run of Family A arms alone must not fail on a
+    workspace token no arm in it uses.
+    """
+    if config.kind == "genie":
+        return build_genie_conversation(DatabricksTarget.from_env())
+    return build_agents_conversation(config.response, target=ClickHouseAgentsTarget.from_env())
+
+
 def select_provider(
     arm: str, configs: Sequence[ProviderConfig], engine: Engine
 ) -> ProviderConfig | None:
@@ -255,6 +295,9 @@ async def build_systems(
     connector: Connector,
     sessions: list[McpSession],
     engine: Engine = DEFAULT_ENGINE,
+    managed: Sequence[ManagedConfig] = (),
+    tasks: Sequence[Task] = (),
+    conversations: ConversationFactory = default_conversation,
 ) -> tuple[SystemUnderTest, ...]:
     """Construct each named arm, refusing names that do not exist yet.
 
@@ -267,15 +310,32 @@ async def build_systems(
     credential no arm in it uses.
     """
     grounded = {config.arm for config in providers}
-    known = {*ARMS, *servers, *grounded}
+    services = {config.name: config for config in managed}
+    known = {*ARMS, *servers, *grounded, *services}
     unknown = [arm for arm in arms if arm not in known]
     if unknown:
         raise CliError(f"unknown arm(s) {unknown}; available: {sorted(known)}")
+
+    if any(arm in services for arm in arms) and not tasks:
+        raise CliError(
+            "a managed arm is only scored after its curated examples are checked against "
+            "the suite; build it with the run's tasks rather than without them"
+        )
 
     built: list[SystemUnderTest] = []
     for arm in arms:
         if arm in ARMS:
             built.append(ARMS[arm](executor, client))
+            continue
+        if arm in services:
+            built.append(
+                ManagedSystem.create(
+                    config=services[arm],
+                    conversation=conversations(services[arm]),
+                    executor=executor,
+                    tasks=tasks,
+                )
+            )
             continue
         if arm in grounded:
             config = select_provider(arm, providers, engine)
@@ -339,6 +399,7 @@ async def run_bench(
     write: Writer,
     tool_client_factory: ToolClientFactory | None = None,
     connector: Connector = connect,
+    conversations: ConversationFactory = default_conversation,
 ) -> tuple[Cell, ...]:
     """Build everything the options name, run it, and report."""
     tool_client_factory = tool_client_factory or default_tool_client
@@ -363,8 +424,16 @@ async def run_bench(
             connector=connector,
             sessions=sessions,
             engine=options.engine,
+            managed=load_managed_catalogue(options.managed),
+            tasks=tuple(suite),
+            conversations=conversations,
         )
         run_id = new_run_id()
+        committed = _commit_managed_configs(
+            systems, options.out / f"{run_id}{MANAGED_RECORD_SUFFIX}"
+        )
+        if committed is not None:
+            write(f"managed service configs: {committed}")
         spec = RunSpec(
             suite=suite,
             systems=systems,
@@ -386,6 +455,17 @@ async def run_bench(
         write(line)
     write(f"traces: {writer.path}")
     return cells
+
+
+def _commit_managed_configs(systems: Sequence[SystemUnderTest], path: Path) -> Path | None:
+    """Write what each managed service was given, beside the run's traces.
+
+    The fingerprint on a trace record proves two runs used the same space; only
+    this file says what that space actually contained, which is what §11.5.2
+    requires before a Genie number may be published at all.
+    """
+    configs = [system.config for system in systems if isinstance(system, ManagedSystem)]
+    return write_config_record(configs, path) if configs else None
 
 
 async def _close_providers(systems: Sequence[SystemUnderTest]) -> None:
