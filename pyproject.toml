@@ -45,8 +45,8 @@ seed = ["duckdb>=1.1"]
 agentdb = "agentdb.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/vivekgangavarapu/agentdb"
-Documentation = "https://github.com/vivekgangavarapu/agentdb/tree/main/docs"
+Homepage = "https://github.com/Vivek1106-04/agentdb"
+Documentation = "https://github.com/Vivek1106-04/agentdb/tree/main/docs"
 
 [dependency-groups]
 dev = [
