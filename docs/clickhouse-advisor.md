@@ -15,9 +15,27 @@ SELECT count() FROM agentdb.hits WHERE toString(CounterID) = '62'
 SELECT count() FROM agentdb.hits WHERE CounterID = 62
 ```
 
-Same answer. **4.0x more bytes read** for the first one, measured on a live
-instance — that is what `make demo` prints, and the number comes out of the
-engine rather than out of this paragraph. On a wider predicate the gap is larger.
+Same answer — 738172 both times. **255 KB read against 64.0 KB, 4.0x**, measured
+on a live 99,997,497-row instance; that is what `make demo` prints, and the
+number comes out of the engine rather than out of this paragraph.
+
+`EXPLAIN indexes = 1` says exactly where it went:
+
+```
+                    toString(CounterID) = '62'            CounterID = 62
+Condition:          (toString(CounterID) in ['62','62'])  (CounterID in [62, 62])
+Parts:              4/4                                   1/4
+Granules:           108/12366                             92/12366
+Search Algorithm:   generic exclusion search              binary search
+Ranges:             18                                    2
+```
+
+Worth being precise about what broke, because it is not what people expect: the
+index does **not** stop working. ClickHouse falls back to *generic exclusion
+search* and still prunes to 108 granules. What it loses is locality — every part
+instead of one, 18 disjoint ranges instead of 2 — and that is where the 4x lives.
+On a cold mark cache the first run reads 575 KB (9.0x); the grounded side stays
+at 64.0 KB either way.
 
 This document is the ClickHouse half of what agentdb tells a model, and how to
 read the same facts yourself. Companion to `docs/databricks-grounding.md`;
@@ -83,9 +101,12 @@ SELECT count() FROM agentdb.hits WHERE CounterID = 62
 SETTINGS use_query_condition_cache = 0, use_skip_indexes_on_data_read = 0;
 ```
 
-Read `Initial Granules` and `Selected Granules` out of the `Indexes` array. Those
-two integers are the whole efficiency story: 3,052 of 12,208 granules selected is
-a working key; 12,208 of 12,208 is a full scan wearing a `WHERE` clause.
+Read `Granules` — selected over total — out of the `Indexes` block, along with
+`Parts` and `Search Algorithm`. Those are the whole efficiency story: 92 of
+12,366 granules across 1 of 4 parts by binary search is a working key; 12,366 of
+12,366 is a full scan wearing a `WHERE` clause. In `json = 1` output the same two
+integers arrive as `Initial Granules` and `Selected Granules`, which is what the
+plan IR reads.
 
 **Both settings are load-bearing on ClickHouse ≥ 25.9.** Without them the
 `indexes` output reflects cached condition results and skip-index behaviour at
