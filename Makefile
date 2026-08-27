@@ -86,8 +86,8 @@ bench-quick-dbx: ## The same subset against a Databricks SQL warehouse (SPEC 18.
 report: ## Regenerate REPORT.md and results/charts/*.svg from traces (no model or engine calls)
 	$(RUN) python -m agenteval report --from-raw results/raw
 
-demo: ## Side-by-side baseline vs grounded run used in the README
-	$(RUN) python -m agentdb.cli demo
+demo: ## Side-by-side baseline vs grounded run used in the README (needs make up + load-clickbench)
+	$(RUN) agentdb demo --engine clickhouse
 
 clean: ## Remove build and test artifacts
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov dist build

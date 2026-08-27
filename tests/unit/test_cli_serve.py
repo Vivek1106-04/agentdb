@@ -8,6 +8,7 @@ token would land in shell history.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -20,13 +21,29 @@ from tests.fakes import clickhouse_hits_fixture
 from tests.memory_fakes import FakeConnection
 
 
+def parse(*argv: str) -> Any:
+    """Parse as ``main`` does, so the tests cover the invocation users type."""
+    return cli.parser().parse_args(cli._with_default_command(list(argv)))
+
+
 async def test_the_default_engine_is_the_one_that_runs_locally() -> None:
-    assert cli.parser().parse_args([]).engine == "clickhouse"
+    assert parse().engine == "clickhouse"
+
+
+async def test_serving_stays_the_default_command_for_configs_already_in_the_wild() -> None:
+    arguments = parse("--engine", "databricks")
+
+    assert arguments.command == "serve"
+    assert arguments.engine == "databricks"
+
+
+async def test_the_demo_is_reached_by_name() -> None:
+    assert parse("demo", "--engine", "databricks").command == "demo"
 
 
 async def test_an_unknown_engine_is_refused_before_anything_connects() -> None:
     with pytest.raises(SystemExit):
-        cli.parser().parse_args(["--engine", "snowflake"])
+        parse("--engine", "snowflake")
 
 
 async def test_clickhouse_is_reached_through_its_environment_target(
@@ -100,6 +117,68 @@ def test_the_memory_tools_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert cli.main(["--memory"]) == 0
     assert served == [("clickhouse", True)]
+
+
+def test_main_runs_the_demo_when_it_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    ran: list[str] = []
+
+    async def demo(engine: str, **_: Any) -> None:
+        ran.append(engine)
+
+    monkeypatch.setattr(cli, "demo", demo)
+
+    assert cli.main(["demo", "--engine", "databricks"]) == 0
+    assert ran == ["databricks"]
+
+
+def test_the_top_level_help_survives_the_default_command() -> None:
+    with pytest.raises(SystemExit) as exit_code:
+        cli.main(["--help"])
+
+    assert exit_code.value.code == 0
+
+
+async def test_the_demo_prints_its_panel_and_closes_the_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[bool] = []
+
+    async def build_adapter(engine: str) -> Any:
+        return SimpleNamespace(client=SimpleNamespace(close=lambda: _record(closed)))
+
+    async def run_demo(built: Any, case: Any, **_: Any) -> str:
+        return "panel"
+
+    monkeypatch.setattr(cli, "build_adapter", build_adapter)
+    monkeypatch.setattr(cli, "run_demo", run_demo)
+    written: list[str] = []
+
+    await cli.demo("clickhouse", write=written.append)
+
+    assert written == ["panel"]
+    assert closed == [True]
+
+
+async def test_an_adapter_with_no_connection_to_close_still_prints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def build_adapter(engine: str) -> Any:
+        return SimpleNamespace()
+
+    async def run_demo(built: Any, case: Any, **_: Any) -> str:
+        return "panel"
+
+    monkeypatch.setattr(cli, "build_adapter", build_adapter)
+    monkeypatch.setattr(cli, "run_demo", run_demo)
+    written: list[str] = []
+
+    await cli.demo("clickhouse", write=written.append)
+
+    assert written == ["panel"]
+
+
+async def _record(closed: list[bool]) -> None:
+    closed.append(True)
 
 
 async def test_serving_with_memory_opens_the_store_and_applies_its_schema(
