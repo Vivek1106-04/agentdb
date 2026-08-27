@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -418,6 +419,20 @@ def test_the_report_command_writes_markdown_from_traces(tmp_path: Path) -> None:
     assert "# agentdb benchmark results" in markdown
     assert out.read_text(encoding="utf-8") == markdown
     assert "1 records" in lines[0]
+
+
+def test_the_report_command_writes_the_charts_it_links(tmp_path: Path) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "run.jsonl").write_text(_trace_line(), encoding="utf-8")
+    out = tmp_path / "REPORT.md"
+
+    markdown = run_report(ReportOptions(from_raw=raw, out=out), write=lambda _: None)
+
+    assert "## Charts" in markdown
+    linked = re.findall(r"!\[[^\]]*\]\((charts/[^)]+)\)", markdown)
+    assert linked
+    assert all((out.parent / link).is_file() for link in linked)
 
 
 def test_the_report_command_reports_a_missing_trace_directory(tmp_path: Path) -> None:

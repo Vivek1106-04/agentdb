@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900.00" height="460.00" viewBox="0 0 900.00 460.00" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect x="0.00" y="0.00" width="900.00" height="460.00" fill="#ffffff"/>
+<text x="24.00" y="30.00" font-size="16.00" fill="#1c1c1c" text-anchor="start" font-weight="600" dominant-baseline="alphabetic">Execution accuracy against token cost</text>
+<text x="24.00" y="48.00" font-size="11.00" fill="#6b6b6b" text-anchor="start" font-weight="normal" dominant-baseline="alphabetic">One point per arm and suite. Up and to the left is better.</text>
+<rect x="24.00" y="60.00" width="10.00" height="10.00" fill="#3b6ea5"/>
+<text x="39.00" y="68.00" font-size="11.00" fill="#6b6b6b" text-anchor="start" font-weight="normal" dominant-baseline="middle">tpch_nl</text>
+<line x1="90.00" y1="80.00" x2="90.00" y2="410.00" stroke="#9a9a9a" stroke-width="1"/>
+<text x="90.00" y="428.00" font-size="11.00" fill="#6b6b6b" text-anchor="middle" font-weight="normal" dominant-baseline="alphabetic">0</text>
+<line x1="255.00" y1="80.00" x2="255.00" y2="410.00" stroke="#dcdcdc" stroke-width="1"/>
+<text x="255.00" y="428.00" font-size="11.00" fill="#6b6b6b" text-anchor="middle" font-weight="normal" dominant-baseline="alphabetic">50</text>
+<line x1="420.00" y1="80.00" x2="420.00" y2="410.00" stroke="#dcdcdc" stroke-width="1"/>
+<text x="420.00" y="428.00" font-size="11.00" fill="#6b6b6b" text-anchor="middle" font-weight="normal" dominant-baseline="alphabetic">100</text>
+<line x1="585.00" y1="80.00" x2="585.00" y2="410.00" stroke="#dcdcdc" stroke-width="1"/>
+<text x="585.00" y="428.00" font-size="11.00" fill="#6b6b6b" text-anchor="middle" font-weight="normal" dominant-baseline="alphabetic">150</text>
+<line x1="750.00" y1="80.00" x2="750.00" y2="410.00" stroke="#dcdcdc" stroke-width="1"/>
+<text x="750.00" y="428.00" font-size="11.00" fill="#6b6b6b" text-anchor="middle" font-weight="normal" dominant-baseline="alphabetic">200</text>
+<text x="80.00" y="410.00" font-size="11.00" fill="#6b6b6b" text-anchor="end" font-weight="normal" dominant-baseline="middle">0%</text>
+<text x="80.00" y="327.50" font-size="11.00" fill="#6b6b6b" text-anchor="end" font-weight="normal" dominant-baseline="middle">25%</text>
+<text x="80.00" y="245.00" font-size="11.00" fill="#6b6b6b" text-anchor="end" font-weight="normal" dominant-baseline="middle">50%</text>
+<text x="80.00" y="162.50" font-size="11.00" fill="#6b6b6b" text-anchor="end" font-weight="normal" dominant-baseline="middle">75%</text>
+<text x="80.00" y="80.00" font-size="11.00" fill="#6b6b6b" text-anchor="end" font-weight="normal" dominant-baseline="middle">100%</text>
+<text x="420.00" y="450.00" font-size="11.00" fill="#6b6b6b" text-anchor="middle" font-weight="normal" dominant-baseline="alphabetic">mean tokens per task (input + output)</text>
+<text x="18.00" y="245.00" font-size="11.00" fill="#6b6b6b" text-anchor="middle" font-weight="normal" dominant-baseline="alphabetic" transform="rotate(-90.00 18.00 245.00)">execution accuracy</text>
+<circle cx="441.36" cy="80.00" r="5" fill="#3b6ea5" fill-opacity="0.85" stroke="#ffffff" stroke-width="1"/>
+<text x="450.36" y="80.00" font-size="10.00" fill="#1c1c1c" text-anchor="start" font-weight="normal" dominant-baseline="middle">S5_claude_code</text>
+</svg>

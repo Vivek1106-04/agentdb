@@ -73,8 +73,9 @@ load-tpch: ## Load TPC-H at the scale factor samples.tpch ships, so tpch_nl cros
 freeze-gold: ## Verify gold against the loaded data once and commit the hashes
 	$(RUN) python -m agenteval freeze-gold
 
-bench: ## Full benchmark matrix; writes results/
+bench: ## Full benchmark matrix; writes results/ (report and charts included)
 	$(RUN) python -m agenteval bench --arm A0_baseline --arm A7_oracle
+	$(MAKE) report
 
 bench-quick: ## Small subset a stranger can run in five minutes
 	$(RUN) python -m agenteval bench --quick
@@ -82,7 +83,7 @@ bench-quick: ## Small subset a stranger can run in five minutes
 bench-quick-dbx: ## The same subset against a Databricks SQL warehouse (SPEC 18.1)
 	$(RUN) python -m agenteval bench --quick --engine databricks --suite tpch_nl
 
-report: ## Regenerate REPORT.md from committed traces (no model or engine calls)
+report: ## Regenerate REPORT.md and results/charts/*.svg from traces (no model or engine calls)
 	$(RUN) python -m agenteval report --from-raw results/raw
 
 demo: ## Side-by-side baseline vs grounded run used in the README

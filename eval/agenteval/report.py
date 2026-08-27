@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agenteval.charts import Chart
 from agenteval.stats import (
     Interval,
     McNemarResult,
@@ -27,6 +28,9 @@ REPORT_TITLE = "# agentdb benchmark results"
 
 CELL_KEY = ("task_id", "seed", "model")
 """What makes two rows the same measurement on different arms."""
+
+CHART_DIR_NAME = "charts"
+"""Where ``make report`` writes the figures, relative to the report itself."""
 
 
 class ReportError(ValueError):
@@ -128,8 +132,18 @@ def compare_to_baseline(
     return tuple(comparisons)
 
 
-def render(records: Sequence[Mapping[str, Any]], *, baseline: str | None = None) -> str:
-    """The whole report, as markdown."""
+def render(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    baseline: str | None = None,
+    charts: Sequence[Chart] = (),
+) -> str:
+    """The whole report, as markdown.
+
+    ``charts`` are the figures already written beside the report; they are
+    passed in rather than rebuilt here so the links can never name a file that
+    was not emitted.
+    """
     summaries = summarize(records)
     sections = [
         REPORT_TITLE,
@@ -139,6 +153,7 @@ def render(records: Sequence[Mapping[str, Any]], *, baseline: str | None = None)
         "",
         _render_provenance(records),
         "",
+        *_render_charts(charts),
         _render_leaderboard(summaries),
         "",
         _render_errors(summaries),
@@ -265,6 +280,16 @@ def _render_contamination(found: Sequence[Contamination]) -> str:
             *rows,
         ]
     )
+
+
+def _render_charts(charts: Sequence[Chart]) -> list[str]:
+    """Link the figures written beside this file, headline chart first."""
+    if not charts:
+        return []
+
+    lines = ["## Charts", ""]
+    lines += [f"![{chart.title}]({CHART_DIR_NAME}/{chart.filename})" for chart in charts]
+    return ["\n".join(lines), ""]
 
 
 def _render_absent_baseline(baseline: str) -> str:

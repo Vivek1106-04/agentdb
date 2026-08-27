@@ -11,6 +11,11 @@ is called: every number below is a function of the committed traces.
 - tasks: 12
 - graded cells: 36
 
+## Charts
+
+![Family S leaderboard](charts/01-family-s-leaderboard.svg)
+![Accuracy against token cost](charts/06-accuracy-vs-cost.svg)
+
 ## Execution accuracy
 
 | arm | model | EX (95% CI) | EX@1 | valid SQL | retries | in tok | out tok | ctx B |

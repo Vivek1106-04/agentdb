@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from agenteval.charts import build_charts, write_charts
 from agenteval.engines.clickhouse import ClickHouseExecutor
 from agenteval.engines.connect import (
     ClickHouseTarget,
@@ -39,7 +40,7 @@ from agenteval.models.base import ModelClient
 from agenteval.models.claude_cli import PROVIDER as CLI_PROVIDER
 from agenteval.models.claude_cli import ClaudeCliClient
 from agenteval.models.tools import ToolUsingClient
-from agenteval.report import load_run, render
+from agenteval.report import CHART_DIR_NAME, load_run, render
 from agenteval.runner import Cell, RunSpec, new_run_id, run
 from agenteval.suites import SUITES_DIR, load_builtin
 from agenteval.systems.base import ModelSpec, SystemUnderTest
@@ -405,10 +406,12 @@ async def _close_providers(systems: Sequence[SystemUnderTest]) -> None:
 def run_report(options: ReportOptions, *, write: Writer) -> str:
     """Regenerate the report. Deterministic, offline, and cheap to re-run."""
     records = load_run(options.from_raw)
-    markdown = render(records, baseline=options.baseline)
+    charts = build_charts(records)
     options.out.parent.mkdir(parents=True, exist_ok=True)
+    written = write_charts(charts, options.out.parent / CHART_DIR_NAME)
+    markdown = render(records, baseline=options.baseline, charts=charts)
     options.out.write_text(markdown, encoding="utf-8")
-    write(f"{len(records)} records -> {options.out}")
+    write(f"{len(records)} records -> {options.out} ({len(written)} charts)")
     return markdown
 
 
