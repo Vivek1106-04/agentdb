@@ -2,7 +2,7 @@
 UV ?= uv
 RUN := $(UV) run
 
-.PHONY: help install fmt lint typecheck arch test test-unit test-contract test-e2e check up down seed load-clickbench load-tpch freeze-gold bench bench-quick bench-quick-dbx report demo clean
+.PHONY: help install fmt lint typecheck arch test test-unit test-contract test-e2e check up down seed load-clickbench load-tpch freeze-gold bench bench-ch bench-dbx bench-managed bench-quick bench-quick-dbx report demo clean
 
 help: ## Show available targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -73,9 +73,46 @@ load-tpch: ## Load TPC-H at the scale factor samples.tpch ships, so tpch_nl cros
 freeze-gold: ## Verify gold against the loaded data once and commit the hashes
 	$(RUN) python -m agenteval freeze-gold
 
-bench: ## Full benchmark matrix; writes results/ (report and charts included)
-	$(RUN) python -m agenteval bench --arm A0_baseline --arm A7_oracle
-	$(MAKE) report
+# The M7 matrix, as arm lists rather than as one unreadable command line.
+#
+# Family A is the ablation ladder: every arm here grounds against the engine the
+# run measures, and providers.yaml carries an entry per (arm, engine) so a
+# mismatch fails the run instead of grounding on the wrong engine.
+#
+# Family S is split by what it costs to run. S1/S2/S5 need only an API key or a
+# subscription. S3/S4a/S4b reach a vendor's managed product, need credentials
+# this repository never holds, and must not be run before their beta terms are
+# read (SPEC 11.5.1) — so they are their own target, never a step of `bench`.
+ARMS_A := A0_baseline A1_stats A2_layout A3_plan A4_memory A5_negmemory A6_full A7_oracle
+ARMS_S := S1_mcp_clickhouse S2_mcp_agentdb S5_agentdb
+ARMS_S_DBX := S5_agentdb
+ARMS_MANAGED_CH := S3_clickhouse_agents
+ARMS_MANAGED_DBX := S4a_genie_minimal S4b_genie_curated
+
+SEEDS ?= 5   # SPEC 11.4 requires >= 5 per (task, arm, model) at temperature > 0
+MODELS ?= anthropic/claude-opus-5 anthropic/claude-sonnet-5
+arm_flags = $(foreach arm,$(1),--arm $(arm))
+model_flags = $(foreach model,$(MODELS),--model $(model))
+
+bench: bench-ch bench-dbx report ## The full matrix on both engines, then the report
+
+bench-ch: ## Family A + local Family S on ClickHouse (needs make up + load-clickbench)
+	$(RUN) python -m agenteval bench --engine clickhouse --suite clickbench_nl \
+		$(call arm_flags,$(ARMS_A) $(ARMS_S)) $(model_flags) --seeds $(SEEDS)
+	$(RUN) python -m agenteval bench --engine clickhouse --suite tpch_nl \
+		$(call arm_flags,$(ARMS_A) $(ARMS_S)) $(model_flags) --seeds $(SEEDS)
+
+bench-dbx: ## Family A + local Family S on Databricks; tpch_nl is the cross-engine suite
+	$(RUN) python -m agenteval bench --engine databricks --suite tpch_nl \
+		$(call arm_flags,$(ARMS_A) $(ARMS_S_DBX)) $(model_flags) --seeds $(SEEDS)
+
+bench-managed: ## The vendor products (SPEC 11.5.1/11.5.2). Read their beta terms first.
+	@echo "S3/S4 measure another company's product. Confirm the beta terms permit"
+	@echo "publishing benchmark results, and that private disclosure is planned."
+	$(RUN) python -m agenteval bench --engine clickhouse --suite clickbench_nl \
+		$(call arm_flags,$(ARMS_MANAGED_CH)) --seeds $(SEEDS)
+	$(RUN) python -m agenteval bench --engine databricks --suite tpch_nl \
+		$(call arm_flags,$(ARMS_MANAGED_DBX)) --seeds $(SEEDS)
 
 bench-quick: ## Small subset a stranger can run in five minutes
 	$(RUN) python -m agenteval bench --quick

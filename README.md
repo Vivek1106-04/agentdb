@@ -42,9 +42,22 @@ of them:
   operator's instruction files into every call, which is recorded on each
   attempt rather than argued about later.
 
-Design notes and the benchmark methodology land in `docs/` as the harness comes
-together — `docs/methodology.md` (including threats to validity) ships with the
-first results.
+## Docs
+
+- [`docs/methodology.md`](docs/methodology.md) — how a number is produced, and
+  every threat to validity known to the author.
+- [`docs/databricks-grounding.md`](docs/databricks-grounding.md) — what an agent
+  needs to know about Delta that the schema does not say: the 32-column data
+  skipping limit, `PushedFilters` versus `DataFilters`, and why `EXPLAIN COST`
+  without `ANALYZE` is worse than no plan at all.
+- [`docs/clickhouse-advisor.md`](docs/clickhouse-advisor.md) — the same for
+  ClickHouse: sparse indexes and granule pruning, why sort keys are
+  cardinality-ordered rather than selectivity-ordered, projection versus skip
+  index.
+- [`docs/architecture.md`](docs/architecture.md) — the layers, and the one
+  import CI forbids.
+- [`docs/security.md`](docs/security.md) — read-only is enforced at the
+  connection, not by inspecting SQL strings. Includes what is *not* built yet.
 
 ## Development
 
