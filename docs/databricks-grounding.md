@@ -204,7 +204,8 @@ handed a number treats it as measured and reasons from it. So:
 - The default explain mode is `EXPLAIN FORMATTED`, which reports structure and
   pushed filters — facts, not estimates.
 - `ANALYZE TABLE … COMPUTE STATISTICS` is never issued by agentdb. It writes, and
-  the benchmark's principal holds `SELECT` and nothing more (SPEC §13.3). It is
+  the benchmark's principal holds `SELECT` and nothing more
+  ([`security.md`](security.md)). It is
   emitted as a *recommendation*, for a human to run.
 
 One more sharp edge, learned live: **Databricks answers `EXPLAIN` over an invalid
@@ -318,9 +319,9 @@ to hand to a model before it writes the query rather than after.
 
 If any of this is wrong, it is wrong in public and in a file with a git history.
 Open an issue or a PR and it gets fixed with credit. Measurements against
-Databricks are published under the disclosure rules in `SPEC.md` §15: the vendor
-sees the methodology and the numbers privately, with a stated response window,
-before anything goes out.
+Databricks are published under the disclosure rules in
+[`disclosure.md`](disclosure.md): the vendor sees the methodology and the numbers
+privately, with a stated response window, before anything goes out.
 
 See also: `docs/clickhouse-advisor.md` for the same treatment of the other
 engine, and `docs/methodology.md` for how any of this is measured.

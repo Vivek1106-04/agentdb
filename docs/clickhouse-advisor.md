@@ -271,7 +271,7 @@ startup reaper, chaos test — are shared with the Databricks side and described
 
 Wrong in public, in a file with a git history. Issues and PRs get fixed with
 credit. ClickHouse Agents and `mcp-clickhouse` measurements follow the disclosure
-rules in `SPEC.md` §15: methodology and numbers privately to the vendor first,
-with a stated response window.
+rules in [`disclosure.md`](disclosure.md): methodology and numbers privately to
+the vendor first, with a stated response window.
 
 See also `docs/databricks-grounding.md` and `docs/methodology.md`.

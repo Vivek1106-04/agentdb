@@ -29,9 +29,9 @@ the server, whatever produced the string.
 
 **Databricks** — a Unity Catalog service principal granted `USE CATALOG`,
 `USE SCHEMA`, and `SELECT`. On this engine the boundary is stronger than on
-ClickHouse, because UC grants *are* the authorization system. SPEC §13.3 is
-explicit that no SQL-parsing "safety" layer should be added on top: it would add
-no protection and invite false confidence.
+ClickHouse, because UC grants *are* the authorization system. No SQL-parsing
+"safety" layer is added on top, deliberately: it would add no protection and
+invite false confidence.
 
 The identifier quoting in `adapters/clickhouse_sql.py` is a **corruption check**,
 not an injection defence, and its docstring says so — names reach the adapter

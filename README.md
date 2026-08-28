@@ -47,6 +47,13 @@ committed. Task authoring was finished and git-timestamped on 2026-08-16,
 before any Family S run — which is what makes the contamination check mean
 something.
 
+`tpch_nl` asks natural-language questions over TPC-H-derived data (Databricks'
+`samples.tpch`, and the same scale factor loaded locally). It measures
+NL→SQL accuracy, not database performance: nothing here is an official TPC
+benchmark result and none of it is comparable to one. `clickbench_nl` is
+likewise a natural-language layer over the ClickBench `hits` dataset, not a
+ClickBench performance run.
+
 ---
 
 ## Reproduce something in five minutes
@@ -289,7 +296,14 @@ otherwise.
 - [`docs/clickhouse-advisor.md`](docs/clickhouse-advisor.md) — sparse indexes
   and granule pruning, why sort keys are cardinality-ordered, projection versus
   skip index.
+- [`docs/disclosure.md`](docs/disclosure.md) — the rules a measurement of
+  another company's product is published under.
 - [`docs/architecture.md`](docs/architecture.md) · [`docs/security.md`](docs/security.md)
+
+Docstrings throughout the source cite `SPEC.md`, an unpublished design document
+that fixed these decisions before they were built. Each citation is provenance
+for a rule the docstring already states in full — nothing needed to read the
+code lives only in that file.
 
 ## Development
 
@@ -301,8 +315,9 @@ make demo      # the before/after above, measured live
 ```
 
 Measurements of another company's product follow the disclosure rules in
-`SPEC.md` §15: methodology and numbers go to the vendor privately, with a stated
-response window, before anything is published. Corrections are credited by name.
+[`docs/disclosure.md`](docs/disclosure.md): methodology and numbers go to the
+vendor privately, with a stated response window, before anything is published.
+Corrections are credited by name.
 
 ## License
 
